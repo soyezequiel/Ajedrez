@@ -66,6 +66,7 @@ function start(): void {
   wireNet();
   const token = resolveToken();
   if (!token) return renderLogin();
+  renderConnecting();
   net.connect();
   net.auth(token);
 }
@@ -122,6 +123,11 @@ function wireNet(): void {
     patchGame();
   });
   net.on("error", (m) => toast(`${m.code}: ${m.message}`));
+  // Si el socket se cae ANTES de autenticar (server caído, wss mal apuntado),
+  // mostramos un estado claro en vez de dejar la pantalla en blanco.
+  net.on("close", () => {
+    if (!state.identity) renderConnError();
+  });
 }
 
 function cleanUrl(): void {
@@ -155,6 +161,28 @@ function endedText(winners: string[]): string {
   const me = state.identity?.npub;
   if (me && winners.includes(me)) return "¡Ganaste!";
   return `Ganó ${nameOf(winners[0]!)}`;
+}
+
+// --------------------------------------------------------------- render: conexión
+
+function renderConnecting(): void {
+  app.innerHTML = `
+    <div class="center-screen"><div class="login">
+      <h1>♞ <span class="accent">Ajedrez</span></h1>
+      <p class="muted">Conectando con el servidor…</p>
+    </div></div>`;
+}
+
+function renderConnError(): void {
+  app.innerHTML = `
+    <div class="center-screen"><div class="login">
+      <h1>♞ <span class="accent">Ajedrez</span></h1>
+      <p class="muted">No se pudo conectar con el servidor de la partida.</p>
+      <div class="row" style="margin-top:18px">
+        <button class="primary" id="retry">Reintentar</button>
+      </div>
+    </div></div>`;
+  document.getElementById("retry")!.addEventListener("click", () => location.reload());
 }
 
 // --------------------------------------------------------------- render: login

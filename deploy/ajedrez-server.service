@@ -1,0 +1,41 @@
+# systemd unit para el server autoritativo de ajedrez.
+#
+# Instalar:
+#   sudo cp deploy/ajedrez-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ajedrez-server
+#   sudo systemctl status ajedrez-server      # ver estado
+#   journalctl -u ajedrez-server -f           # ver logs en vivo
+#
+# Ajustá WorkingDirectory, User y la ruta de node a tu VPS.
+
+[Unit]
+Description=Ajedrez server (autoridad WebSocket + Luna Negra)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Usuario sin privilegios dueño de /opt/ajedrez (crealo: sudo useradd -r -s /usr/sbin/nologin ajedrez)
+User=ajedrez
+WorkingDirectory=/opt/ajedrez/server
+
+# Carga server/.env automáticamente (config.ts lo lee con process.loadEnvFile()).
+# Igual dejamos PORT explícito por si querés cambiarlo sin tocar el .env.
+Environment=NODE_ENV=production
+Environment=PORT=8787
+
+# Corre el server vía tsx (igual que en dev). `env` resuelve node del PATH;
+# si usás nvm/volta, poné la ruta absoluta del node (ej. /home/ajedrez/.nvm/.../bin/node).
+ExecStart=/usr/bin/env node --import tsx src/index.ts
+
+Restart=always
+RestartSec=3
+# Endurecimiento básico
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

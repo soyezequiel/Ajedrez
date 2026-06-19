@@ -1,0 +1,14 @@
+# Caddyfile — reverse proxy con TLS automático para el server de ajedrez.
+#
+# Reemplazá el hostname por el tuyo:
+#   - sslip.io:  <IP-PUBLICA-DEL-VPS>.sslip.io     (ej. 203-0-113-7.sslip.io  o  203.0.113.7.sslip.io)
+#   - DuckDNS:   ajedrez-api.duckdns.org
+#   - propio:    api-ajedrez.tudominio.com
+#
+# Caddy saca el certificado Let's Encrypt solo (necesita los puertos 80 y 443
+# abiertos en el firewall del VPS) y hace el upgrade de WebSocket sin config extra.
+
+203-0-113-7.sslip.io {
+	encode zstd gzip
+	reverse_proxy localhost:8787
+}
