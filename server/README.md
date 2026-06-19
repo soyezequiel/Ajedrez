@@ -28,7 +28,7 @@ dependencias); las variables ya exportadas en la shell tienen prioridad.
 Para conectarlo al backend real (la API key `ln_sk_…` vive solo acá, nunca en el
 cliente):
 
-1. **Crear el juego** en https://luna-negra-three.vercel.app/provider (login
+1. **Crear el juego** en https://moon21.vercel.app/provider (login
    Nostr como proveedor): nombre, `slug` = `ajedrez`, precio, imágenes y la
    **URL del juego** (la del shell web).
 2. Copiar el **`gameId`** → `LUNA_GAME_ID`.

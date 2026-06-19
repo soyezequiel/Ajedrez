@@ -19,7 +19,7 @@ export const config = {
   port: Number(process.env.PORT ?? 8787),
 
   luna: {
-    baseUrl: process.env.LUNA_BASE_URL ?? "https://luna-negra-three.vercel.app",
+    baseUrl: process.env.LUNA_BASE_URL ?? "https://moon21.vercel.app",
     apiKey: process.env.LUNA_API_KEY ?? "",
     gameId: process.env.LUNA_GAME_ID ?? "",
     slug: process.env.LUNA_GAME_SLUG ?? "ajedrez",

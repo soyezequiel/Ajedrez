@@ -5,6 +5,6 @@ export const WS_URL =
 // Base de Luna Negra (para el leaderboard "Top", §6). Override con VITE_LUNA_URL.
 export const LUNA_URL =
   (import.meta.env.VITE_LUNA_URL as string | undefined) ??
-  "https://luna-negra-three.vercel.app";
+  "https://moon21.vercel.app";
 
 export const LEADERBOARD = "ajedrez";

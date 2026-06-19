@@ -17,7 +17,7 @@ try {
   // sin .env: usamos lo que haya en el entorno
 }
 
-const baseUrl = (process.env.LUNA_BASE_URL ?? "https://luna-negra-three.vercel.app").replace(/\/$/, "");
+const baseUrl = (process.env.LUNA_BASE_URL ?? "https://moon21.vercel.app").replace(/\/$/, "");
 const apiKey = process.env.LUNA_API_KEY ?? "";
 const gameId = process.env.LUNA_GAME_ID ?? "";
 const webhookSecret = process.env.LUNA_WEBHOOK_SECRET ?? "";
