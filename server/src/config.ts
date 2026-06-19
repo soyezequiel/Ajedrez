@@ -5,6 +5,16 @@
  * Si no está configurada, el cliente Luna Negra cae en modo `mock` para poder
  * desarrollar sin backend (mismo patrón que el Tetris).
  */
+
+// Carga server/.env si existe (Node ≥20.12, zero-dep). Las credenciales reales
+// de Luna Negra (LUNA_API_KEY, LUNA_GAME_ID, LUNA_WEBHOOK_SECRET) viven ahí.
+// Las variables ya presentes en el entorno tienen prioridad y no se pisan.
+try {
+  process.loadEnvFile();
+} catch {
+  // Sin .env: seguimos con process.env tal cual (modo mock o vars exportadas).
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 8787),
 

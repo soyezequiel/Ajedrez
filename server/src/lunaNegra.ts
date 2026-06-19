@@ -65,8 +65,22 @@ class LunaNegraClient {
     if (!config.lunaLive) return mockIdentity(entitlement);
     const r = await this.get("/api/v1/session", { bearer: entitlement });
     if (!r.ok) return null;
-    const j = (await r.json()) as Omit<SessionIdentity, "source">;
-    return { ...j, source: "luna-negra" };
+    // `displayName`/`avatarUrl` pueden venir null en el contrato real.
+    const j = (await r.json()) as {
+      npub: Npub;
+      pubkey: string;
+      displayName: string | null;
+      avatarUrl: string | null;
+      gameId: string;
+    };
+    return {
+      npub: j.npub,
+      pubkey: j.pubkey,
+      displayName: j.displayName || shortNpub(j.npub),
+      avatarUrl: j.avatarUrl ?? null,
+      gameId: j.gameId,
+      source: "luna-negra",
+    };
   }
 
   /** Verifica un invite token de sala (§4). */
@@ -152,7 +166,11 @@ class LunaNegraClient {
       { apiKey: true, idempotencyKey: input.idempotencyKey ?? input.matchId },
     );
     if (!r.ok) return null;
-    return (await r.json()) as BetInfo;
+    // El 201 (CreateBetResponse) trae economía + betId, pero NO `status` ni los
+    // `participants` con handles de pago (bolt11/lnurl). Hidratamos con getBet
+    // para devolver un BetInfo completo y no emitir un pozo a medias a la sala.
+    const created = (await r.json()) as { betId: string };
+    return (await this.getBet(created.betId)) ?? null;
   }
 
   async getBet(betId: string): Promise<BetInfo | null> {
@@ -222,6 +240,11 @@ class LunaNegraClient {
     else if (auth.apiKey) h.authorization = `Bearer ${config.luna.apiKey}`;
     return h;
   }
+}
+
+/** Nombre de respaldo cuando el jugador no tiene displayName (ej. `npub1ab…xyz`). */
+function shortNpub(npub: string): string {
+  return npub.length > 12 ? `${npub.slice(0, 8)}…${npub.slice(-3)}` : npub;
 }
 
 // ---- Datos mock (modo dev sin backend) -----------------------------------
