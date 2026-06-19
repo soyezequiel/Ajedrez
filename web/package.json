@@ -6,8 +6,10 @@
   "description": "Shell web (chess.com-inspired) para el ajedrez con apuestas en sats sobre Luna Negra",
   "scripts": {
     "sync-assets": "node scripts/sync-assets.mjs",
-    "dev": "npm run sync-assets && vite",
-    "build": "npm run sync-assets && tsc && vite build",
+    "sync-game": "node scripts/sync-game.mjs",
+    "sync": "npm run sync-assets && npm run sync-game",
+    "dev": "npm run sync && vite",
+    "build": "npm run sync && tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

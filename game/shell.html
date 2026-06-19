@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <title>Ajedrez · Vexel</title>
   <style>
-    html, body { margin: 0; background: #2b2925; }
-    #vexel-canvas { display: block; margin: 0 auto; touch-action: none; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #2b2925; }
+    #vexel-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   </style>
 </head>
 <body>
-  <canvas id="vexel-canvas" width="960" height="540"></canvas>
+  <canvas id="vexel-canvas" width="600" height="600"></canvas>
   <script>
     var canvas = document.getElementById('vexel-canvas');
     canvas.setAttribute('tabindex', '0');
@@ -38,6 +38,14 @@
           console.log('move', from, to, promo);
       }
     };
+
+    // Clic del canvas → Nim (coords en px de ventana 960x540).
+    canvas.addEventListener('click', function (e) {
+      var r = canvas.getBoundingClientRect();
+      var x = (e.clientX - r.left) * (canvas.width / r.width);
+      var y = (e.clientY - r.top) * (canvas.height / r.height);
+      try { Module.ccall('clickAt', null, ['number', 'number'], [x, y]); } catch (err) {}
+    });
 
     // JS → Nim: el padre (o este harness) aplica estado al tablero.
     window.addEventListener('message', function (e) {

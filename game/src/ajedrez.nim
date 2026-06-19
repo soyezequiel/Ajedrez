@@ -33,9 +33,9 @@ proc shaderExt(shader: string): string =
 
 
 const
-  WinW = 960
-  WinH = 540
-  Board = 512.0'f32   ## lado del tablero en px (coincide con docs)
+  WinW = 600          ## canvas cuadrado para embeber prolijo en el shell
+  WinH = 600
+  Board = 560.0'f32   ## lado del tablero en px (margen chico dentro del canvas)
 
 
 # --- Estado compartido con el interop (JS → Nim) --------------------------
@@ -54,11 +54,14 @@ proc setInteractive(on: cint) {.exportc.} =
   interactive = on != 0
 
 
+when defined(emscripten):
+  proc emscripten_run_script(script: cstring) {.importc, header: "<emscripten.h>".}
+
 # Nim → JS: emite un intento de jugada al shell (que lo manda por WebSocket).
+# Las casillas son algebraicas simples ("e2"), sin comillas → embeber es seguro.
 proc emitMove(fromSq, toSq: string) =
   when defined(emscripten):
-    {.emit: ["window.__chess.onMove(UTF8ToString(", fromSq.cstring,
-             "), UTF8ToString(", toSq.cstring, "), '');"].}
+    emscripten_run_script(("window.__chess.onMove('" & fromSq & "','" & toSq & "','');").cstring)
   else:
     echo "move ", fromSq, " -> ", toSq   # dev desktop
 
@@ -70,11 +73,13 @@ let time = startTime()
 var scene = scene()
 var world = World()
 var graphics = startWgpuGraphics(windows)
-var controllers = makeControllers(MouseController)
+
+# En web el input lo maneja JS (clics del canvas → clickAt), no el sistema de
+# input de Vexel: su módulo de gamepad referencia glfwGetGamepadState, que la
+# GLFW de emscripten no provee (undefined symbol al linkear).
 
 let window = makeWindow("Ajedrez", uvec2(WinW, WinH), false, true, main = true)
 let windowId = world.add(window, Immediate) of Window
-let mouseId = world.add((MouseController(),), Immediate) of MouseController
 
 let depth = world.makeWindowTexture(windowId, { TextureUsage.AttachTexture }, true)
 let depthId = world.add(depth) of Texture
@@ -94,7 +99,7 @@ world.setParentOf(spriteCameraId of Node, rootId)
 ## Un rasterizer de sprite por textura (patrón probado del sample: una textura
 ## por binding). Las piezas usan 12 texturas (wP…bK). CONFIRMAR: si conviene un
 ## atlas único con offsets de uv para reducir draw calls.
-proc spriteRasterizer(texturePath: string): Rasterizer =
+proc spriteRasterizer(texturePath: string): Id[Rasterizer] =
   let texture = world.add(loadTexture(texturePath)) of Texture
   world.add(rasterizer(
     shader[Input, Interface]("shaders/sprite-vertex".shaderExt),
@@ -105,7 +110,7 @@ proc spriteRasterizer(texturePath: string): Rasterizer =
 
 
 let boardRasterizer = spriteRasterizer("textures/board.png")
-var pieceRasterizers: Table[PieceCode, Rasterizer]
+var pieceRasterizers: Table[PieceCode, Id[Rasterizer]]
 for code in ["wP","wN","wB","wR","wQ","wK","bP","bN","bB","bR","bQ","bK"]:
   pieceRasterizers[code] = spriteRasterizer("textures/pieces/" & code & ".png")
 
@@ -114,33 +119,48 @@ for code in ["wP","wN","wB","wR","wQ","wK","bP","bN","bB","bR","bQ","bK"]:
 let boardSprite = makeSprite(
   renders(boardRasterizer),
   name = "board",
-  transform = transform(vec3(0, 0, 0), vec3(0, 0, 0).anglesToQuat, vec3(Board, Board, 1)),
+  transform = transform(vec3(0, 0, -0.2), vec3(0, 0, 0).anglesToQuat, vec3(Board, Board, 1)),
 )
 world.setParentOf(world.add(boardSprite, Immediate) of Node, rootId)
 
 
-# Sprites de piezas: creamos los 32 posibles y los reposicionamos/ocultamos según
-# el FEN. CONFIRMAR: cómo ocultar un sprite (¿escala 0? ¿quitar del árbol?).
-var pieceSprites: seq[tuple[id: Node, code: PieceCode]]
+# Pool de sprites por tipo de pieza. Nunca se borran (borrar+recrear cada FEN
+# corrompe el render): se crean una vez y se REPOSICIONAN; los sobrantes se mandan
+# fuera de pantalla.
 let cell = Board / Files.float32
+const Offscreen = vec3(-10000.0'f32, -10000.0'f32, -0.1'f32)
+var piecePool: Table[PieceCode, seq[EntityId]]
 
-proc rebuildFromFen(fen: string) =
-  # TODO: en vez de recrear, mantener un pool y mover. Scaffold: recrea simple.
-  for ps in pieceSprites:
-    world.remove(ps.id)            # CONFIRMAR nombre de la API de borrado
-  pieceSprites.setLen(0)
+proc makePieceSprite(code: PieceCode): EntityId =
+  let sprite = makeSprite(
+    renders(pieceRasterizers[code]),
+    name = "piece",
+    transform = transform(Offscreen, vec3(0, 0, 0).anglesToQuat, vec3(cell, cell, 1)),
+  )
+  result = world.add(sprite, Immediate)
+  world.setParentOf(result of Node, rootId)
+
+proc moveTo(id: EntityId, pos: Vec3) =
+  for tr in world.write(id of Transform):
+    tr.position = pos
+
+proc applyPlacement(fen: string) =
+  var used: Table[PieceCode, int]
   for p in parseFen(fen):
+    let code = p.piece
+    let idx = used.getOrDefault(code, 0)
+    if not piecePool.hasKey(code): piecePool[code] = @[]
+    while idx >= piecePool[code].len:
+      piecePool[code].add makePieceSprite(code)
     let (x, y) = squareCenter(p.file, p.rank, Board)
-    let sprite = makeSprite(
-      renders(pieceRasterizers[p.piece]),
-      name = "piece",
-      transform = transform(vec3(x, y, 0.0), vec3(0, 0, 0).anglesToQuat, vec3(cell, cell, 1)),
-    )
-    let id = world.add(sprite, Immediate) of Node
-    world.setParentOf(id, rootId)
-    pieceSprites.add (id, p.piece)
+    moveTo(piecePool[code][idx], vec3(x, y, -0.1))
+    used[code] = idx + 1
+  # Ocultar los sprites sobrantes de cada tipo.
+  for code, ids in piecePool:
+    for i in used.getOrDefault(code, 0) ..< ids.len:
+      moveTo(ids[i], Offscreen)
 
-rebuildFromFen(pendingFen)
+applyPlacement(pendingFen)
 var renderedFen = pendingFen
 world.consolidate()
 
@@ -160,21 +180,21 @@ proc handleClick(px, py: float32) =
     selected = none(tuple[file, rank: int])
 
 
+# JS → Nim: el shell pasa el clic del canvas (px en coords de ventana 960x540).
+proc clickAt(px, py: cfloat) {.exportc.} =
+  handleClick(px.float32, py.float32)
+
+
 # --- Loop -----------------------------------------------------------------
 
 proc frame() =
   windows.beginFrame(world)
   graphics.beginFrame(world)
-  controllers.beginFrame(world)
   time.process()
 
   if pendingFen != renderedFen:
-    rebuildFromFen(pendingFen)
+    applyPlacement(pendingFen)
     renderedFen = pendingFen
-
-  let mouse = world.read(mouseId)
-  if mouse.left.justPressed:
-    handleClick(mouse.pointer.position.x, mouse.pointer.position.y)
 
   scene.process(world)
   graphics.process(world)

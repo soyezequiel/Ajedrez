@@ -24,7 +24,7 @@ when defined(emscripten):
   switch("passL", "--preload-file textures")
 
   # Interop JS↔WASM: exponer las funciones del juego y ccall/cwrap.
-  switch("passL", "-sEXPORTED_FUNCTIONS=_main,_applyFen,_setInteractive")
+  switch("passL", "-sEXPORTED_FUNCTIONS=_main,_applyFen,_setInteractive,_clickAt")
   switch("passL", "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap")
   switch("passL", "-sALLOW_MEMORY_GROWTH=1")
 

@@ -6,10 +6,15 @@ barra de amigos, panel de apuesta, reloj y resultado. Habla con el **servidor**
 por WebSocket (autoridad de reglas) y se conecta a **Luna Negra** para identidad
 y top.
 
-El tablero hoy es un **canvas interino** (`src/board.ts`) que usa los PNG de
-`game/textures/`. Implementa el contrato `applyFen` / `setInteractive` /
-`highlight` y emite jugadas por `window.__chess.onMove(...)` — **el mismo
-contrato** que usará el canvas de Vexel (M1), así el swap es directo.
+El tablero por defecto es el de **Vexel** (WASM/WebGPU): `VexelBoard` carga
+`game/bin/ajedrez.js` en la misma página (no iframe — el iframe deadlockea
+`requestDevice` con los pthreads de Dawn) y habla por `ccall`/`window.__chess`.
+Con `?board=canvas` se usa el `CanvasBoard` interino (PNG de `game/textures/`)
+como fallback. Ambos cumplen el contrato `BoardController` (ver `src/board.ts`).
+
+Requisitos del build Vexel: `game/bin` copiado a `public/game/` (`sync-game`) y
+COOP/COEP en Vite (`vite.config.ts`). Verificado e2e: una partida (mate del loco)
+se renderiza en el tablero de Vexel y propaga el resultado.
 
 
 ## Correr

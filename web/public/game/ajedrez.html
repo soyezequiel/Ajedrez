@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Ajedrez · Vexel</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #2b2925; }
+    #vexel-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  </style>
+</head>
+<body>
+  <canvas id="vexel-canvas" width="600" height="600"></canvas>
+  <script>
+    var canvas = document.getElementById('vexel-canvas');
+    canvas.setAttribute('tabindex', '0');
+    canvas.addEventListener('click', function () { canvas.focus(); });
+    canvas.focus();
+
+    var Module = {
+      canvas: canvas,
+      print: function (t) { console.log(t); },
+      printErr: function (t) { console.error(t); },
+      onRuntimeInitialized: function () {
+        // Posición inicial visible apenas carga (útil para test standalone).
+        try { Module.ccall('applyFen', null, ['string'],
+          ['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1']); } catch (e) {}
+        // Avisar al padre (shell de Vite) que el motor está listo.
+        if (window.parent !== window) window.parent.postMessage({ type: 'chess:ready' }, '*');
+      }
+    };
+
+    // Nim → JS: el motor emite intentos de jugada acá.
+    window.__chess = {
+      onMove: function (from, to, promo) {
+        if (window.parent !== window)
+          window.parent.postMessage({ type: 'chess:move', from: from, to: to, promo: promo }, '*');
+        else
+          console.log('move', from, to, promo);
+      }
+    };
+
+    // Clic del canvas → Nim (coords en px de ventana 960x540).
+    canvas.addEventListener('click', function (e) {
+      var r = canvas.getBoundingClientRect();
+      var x = (e.clientX - r.left) * (canvas.width / r.width);
+      var y = (e.clientY - r.top) * (canvas.height / r.height);
+      try { Module.ccall('clickAt', null, ['number', 'number'], [x, y]); } catch (err) {}
+    });
+
+    // JS → Nim: el padre (o este harness) aplica estado al tablero.
+    window.addEventListener('message', function (e) {
+      var d = e.data || {};
+      if (d.type === 'chess:applyFen')
+        Module.ccall('applyFen', null, ['string'], [d.fen]);
+      else if (d.type === 'chess:setInteractive')
+        Module.ccall('setInteractive', null, ['number'], [d.on ? 1 : 0]);
+    });
+  </script>
+  <script async type="text/javascript" src="ajedrez.js"></script>
+</body>
+</html>

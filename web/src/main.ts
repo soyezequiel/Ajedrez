@@ -1,7 +1,7 @@
 import "./styles.css";
 import { WS_URL } from "./config.js";
 import { Net } from "./net.js";
-import { CanvasBoard } from "./board.js";
+import { createBoard, type BoardController, type BoardKind, type MoveFn } from "./board.js";
 import type {
   BetInfo,
   Color,
@@ -41,7 +41,11 @@ const state: State = {
   ended: null,
 };
 
-let board: CanvasBoard | null = null;
+let board: BoardController | null = null;
+
+function boardKind(): BoardKind {
+  return new URLSearchParams(location.search).get("board") === "canvas" ? "canvas" : "vexel";
+}
 
 // --------------------------------------------------------------- arranque
 
@@ -246,14 +250,12 @@ function enterGame(): void {
   app.innerHTML =
     topbar() +
     `<div class="game">
-      <div class="board-wrap"><canvas id="board"></canvas></div>
+      <div class="board-wrap" id="board-wrap"></div>
       <div id="side"></div>
     </div>`;
-  board = new CanvasBoard(document.getElementById("board") as HTMLCanvasElement);
-  window.__chess = {
-    onMove: (from, to, promo) =>
-      net.move(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n")),
-  };
+  const onMove: MoveFn = (from, to, promo) =>
+    net.move(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n"));
+  board = createBoard(document.getElementById("board-wrap")!, onMove, boardKind());
   renderBoardFromMatch();
   patchGame();
 }

@@ -1,20 +1,15 @@
 import type { Color } from "./protocol.js";
 
-// Contrato compartido con el futuro canvas de Vexel. El motor (este canvas hoy,
-// Vexel/WASM mañana) expone applyFen/setInteractive/highlight; y emite jugadas
-// llamando a window.__chess.onMove(from, to, promo).
+export type MoveFn = (from: string, to: string, promo: string) => void;
+
+// Contrato común a los dos motores de tablero: el canvas interino y el de Vexel.
+// Ambos exponen applyFen/setInteractive/highlight y emiten jugadas por onMove.
 export interface BoardController {
   applyFen(fen: string): void;
   setInteractive(on: boolean): void;
   setOrientation(color: Color): void;
   highlight(squares: string[]): void;
   destroy(): void;
-}
-
-declare global {
-  interface Window {
-    __chess?: { onMove: (from: string, to: string, promo: string) => void };
-  }
 }
 
 const PIECE_CODES = ["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"];
@@ -43,6 +38,7 @@ export class CanvasBoard implements BoardController {
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
+    private readonly onMove: MoveFn,
     base = "/textures",
   ) {
     const ctx = canvas.getContext("2d");
@@ -160,7 +156,7 @@ export class CanvasBoard implements BoardController {
       const to = indexToSquare(index);
       this.selected = null;
       this.draw();
-      if (from !== to) window.__chess?.onMove(from, to, "");
+      if (from !== to) this.onMove(from, to, "");
     }
   }
 }
@@ -177,4 +173,105 @@ function squareToIndex(square: string): number {
   const rank = 8 - Number(square[1]);
   if (file < 0 || file > 7 || rank < 0 || rank > 7) return -1;
   return rank * 8 + file;
+}
+
+const GAME_BASE = (import.meta.env.VITE_GAME_BASE as string | undefined) ?? "/game";
+
+declare global {
+  interface Window {
+    Module?: {
+      ccall?: (name: string, ret: string | null, types: string[], args: unknown[]) => unknown;
+      [k: string]: unknown;
+    };
+    __chess?: { onMove: (from: string, to: string, promo: string) => void };
+  }
+}
+
+/**
+ * Tablero renderizado por Vexel (WASM/WebGPU) cargado EN LA MISMA PÁGINA (no en un
+ * iframe). Motivo: un iframe deadlockea el `requestDevice` de WebGPU con los
+ * pthreads de emscripten/Dawn; en contexto top-level resuelve igual que el build
+ * standalone. Inyecta `game/bin/ajedrez.js` con `Module.canvas` + `locateFile` y
+ * habla con el juego por `ccall`. Una sola instancia por carga de página (el botón
+ * "volver al inicio" hace `location.reload()`).
+ */
+export class VexelBoard implements BoardController {
+  private ready = false;
+  private readonly queue: Array<() => void> = [];
+  private readonly canvas: HTMLCanvasElement;
+  private readonly script: HTMLScriptElement;
+
+  constructor(
+    container: HTMLElement,
+    private readonly onMove: MoveFn,
+    base = GAME_BASE,
+  ) {
+    const canvas = document.createElement("canvas");
+    canvas.id = "vexel-canvas";
+    canvas.width = 600;
+    canvas.height = 600;
+    canvas.tabIndex = 0;
+    canvas.style.cssText =
+      "width:100%;aspect-ratio:1;display:block;border-radius:var(--radius,10px);outline:none;";
+    container.appendChild(canvas);
+    this.canvas = canvas;
+
+    canvas.addEventListener("click", (e) => {
+      const r = canvas.getBoundingClientRect();
+      const x = (e.clientX - r.left) * (canvas.width / r.width);
+      const y = (e.clientY - r.top) * (canvas.height / r.height);
+      this.call("clickAt", ["number", "number"], [x, y]);
+    });
+
+    window.__chess = { onMove: (f, t, p) => this.onMove(f, t, p) };
+    window.Module = {
+      canvas,
+      locateFile: (path: string) => `${base}/${path}`,
+      print: () => {},
+      printErr: (t: string) => console.error(t),
+      onRuntimeInitialized: () => {
+        this.ready = true;
+        for (const fn of this.queue) fn();
+        this.queue.length = 0;
+      },
+    };
+
+    const script = document.createElement("script");
+    script.src = `${base}/ajedrez.js`;
+    document.body.appendChild(script);
+    this.script = script;
+  }
+
+  private call(fn: string, types: string[], args: unknown[]): void {
+    const run = () => window.Module?.ccall?.(fn, null, types, args);
+    if (this.ready) run();
+    else this.queue.push(run);
+  }
+
+  applyFen(fen: string): void {
+    this.call("applyFen", ["string"], [fen]);
+  }
+  setInteractive(on: boolean): void {
+    this.call("setInteractive", ["number"], [on ? 1 : 0]);
+  }
+  // Vexel aún dibuja siempre con blancas abajo; orientación/resalte quedan pendientes.
+  setOrientation(_color: Color): void {}
+  highlight(_squares: string[]): void {}
+  destroy(): void {
+    this.script.remove();
+    this.canvas.remove();
+  }
+}
+
+export type BoardKind = "vexel" | "canvas";
+
+/** Crea el tablero dentro de `container`. `?board=canvas` fuerza el canvas interino. */
+export function createBoard(container: HTMLElement, onMove: MoveFn, kind: BoardKind): BoardController {
+  if (kind === "canvas") {
+    const canvas = document.createElement("canvas");
+    canvas.id = "board";
+    container.appendChild(canvas);
+    return new CanvasBoard(canvas, onMove);
+  }
+  return new VexelBoard(container, onMove);
 }
