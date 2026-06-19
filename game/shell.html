@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Ajedrez · Vexel</title>
+  <style>
+    html, body { margin: 0; background: #2b2925; }
+    #vexel-canvas { display: block; margin: 0 auto; touch-action: none; }
+  </style>
+</head>
+<body>
+  <canvas id="vexel-canvas" width="960" height="540"></canvas>
+  <script>
+    var canvas = document.getElementById('vexel-canvas');
+    canvas.setAttribute('tabindex', '0');
+    canvas.addEventListener('click', function () { canvas.focus(); });
+    canvas.focus();
+
+    var Module = {
+      canvas: canvas,
+      print: function (t) { console.log(t); },
+      printErr: function (t) { console.error(t); },
+      onRuntimeInitialized: function () {
+        // Posición inicial visible apenas carga (útil para test standalone).
+        try { Module.ccall('applyFen', null, ['string'],
+          ['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1']); } catch (e) {}
+        // Avisar al padre (shell de Vite) que el motor está listo.
+        if (window.parent !== window) window.parent.postMessage({ type: 'chess:ready' }, '*');
+      }
+    };
+
+    // Nim → JS: el motor emite intentos de jugada acá.
+    window.__chess = {
+      onMove: function (from, to, promo) {
+        if (window.parent !== window)
+          window.parent.postMessage({ type: 'chess:move', from: from, to: to, promo: promo }, '*');
+        else
+          console.log('move', from, to, promo);
+      }
+    };
+
+    // JS → Nim: el padre (o este harness) aplica estado al tablero.
+    window.addEventListener('message', function (e) {
+      var d = e.data || {};
+      if (d.type === 'chess:applyFen')
+        Module.ccall('applyFen', null, ['string'], [d.fen]);
+      else if (d.type === 'chess:setInteractive')
+        Module.ccall('setInteractive', null, ['number'], [d.on ? 1 : 0]);
+    });
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

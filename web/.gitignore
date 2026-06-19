@@ -1,0 +1,6 @@
+node_modules/
+dist/
+public/textures/
+.env
+.env.local
+*.log

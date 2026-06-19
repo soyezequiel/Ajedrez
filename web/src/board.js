@@ -1,0 +1,155 @@
+const PIECE_CODES = ["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"];
+const SELECT_FILL = "rgba(255, 213, 79, 0.55)";
+const HINT_FILL = "rgba(60, 64, 72, 0.30)";
+function loadImage(src) {
+    return new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error("no cargó " + src));
+        img.src = src;
+    });
+}
+/** Tablero 2D en <canvas> usando los PNG de game/textures. */
+export class CanvasBoard {
+    canvas;
+    ctx;
+    board = null;
+    pieces = new Map();
+    placement = new Array(64).fill(null);
+    orientation = "w";
+    interactive = false;
+    selected = null;
+    highlighted = [];
+    constructor(canvas, base = "/textures") {
+        this.canvas = canvas;
+        const ctx = canvas.getContext("2d");
+        if (!ctx)
+            throw new Error("canvas 2d no disponible");
+        this.ctx = ctx;
+        this.canvas.addEventListener("click", (e) => this.onClick(e));
+        void this.load(base).then(() => this.draw());
+    }
+    async load(base) {
+        this.board = await loadImage(`${base}/board.png`);
+        await Promise.all(PIECE_CODES.map(async (code) => {
+            this.pieces.set(code, await loadImage(`${base}/pieces/${code}.png`));
+        }));
+    }
+    applyFen(fen) {
+        this.placement = new Array(64).fill(null);
+        let i = 0;
+        for (const ch of fen.split(" ")[0] ?? "") {
+            if (ch === "/")
+                continue;
+            if (ch >= "1" && ch <= "8") {
+                i += Number(ch);
+            }
+            else {
+                const color = ch === ch.toUpperCase() ? "w" : "b";
+                this.placement[i] = color + ch.toUpperCase();
+                i += 1;
+            }
+        }
+        this.selected = null;
+        this.draw();
+    }
+    setInteractive(on) {
+        this.interactive = on;
+        if (!on)
+            this.selected = null;
+        this.draw();
+    }
+    setOrientation(color) {
+        this.orientation = color;
+        this.draw();
+    }
+    highlight(squares) {
+        this.highlighted = squares.map(squareToIndex).filter((i) => i >= 0);
+        this.draw();
+    }
+    destroy() {
+        this.canvas.replaceWith(this.canvas.cloneNode(true));
+    }
+    /** index 0..63 (rank8a..rank1h) → posición de dibujo según orientación. */
+    cellRect(index) {
+        const size = this.canvas.clientWidth / 8;
+        const file = index % 8;
+        const rank = Math.floor(index / 8);
+        const col = this.orientation === "w" ? file : 7 - file;
+        const row = this.orientation === "w" ? rank : 7 - rank;
+        return { x: col * size, y: row * size, size };
+    }
+    draw() {
+        const css = this.canvas.clientWidth || 480;
+        const dpr = window.devicePixelRatio || 1;
+        if (this.canvas.width !== css * dpr) {
+            this.canvas.width = css * dpr;
+            this.canvas.height = css * dpr;
+        }
+        const ctx = this.ctx;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, css, css);
+        if (this.board)
+            ctx.drawImage(this.board, 0, 0, css, css);
+        for (const idx of this.highlighted)
+            this.paintCell(idx, HINT_FILL);
+        if (this.selected !== null)
+            this.paintCell(this.selected, SELECT_FILL);
+        for (let i = 0; i < 64; i++) {
+            const code = this.placement[i];
+            if (!code)
+                continue;
+            const img = this.pieces.get(code);
+            if (!img)
+                continue;
+            const { x, y, size } = this.cellRect(i);
+            ctx.drawImage(img, x, y, size, size);
+        }
+    }
+    paintCell(index, fill) {
+        const { x, y, size } = this.cellRect(index);
+        this.ctx.fillStyle = fill;
+        this.ctx.fillRect(x, y, size, size);
+    }
+    onClick(e) {
+        if (!this.interactive)
+            return;
+        const rect = this.canvas.getBoundingClientRect();
+        const size = rect.width / 8;
+        const col = Math.floor((e.clientX - rect.left) / size);
+        const row = Math.floor((e.clientY - rect.top) / size);
+        if (col < 0 || col > 7 || row < 0 || row > 7)
+            return;
+        const file = this.orientation === "w" ? col : 7 - col;
+        const rank = this.orientation === "w" ? row : 7 - row;
+        const index = rank * 8 + file;
+        if (this.selected === null) {
+            if (this.placement[index]) {
+                this.selected = index;
+                this.draw();
+            }
+        }
+        else {
+            const from = indexToSquare(this.selected);
+            const to = indexToSquare(index);
+            this.selected = null;
+            this.draw();
+            if (from !== to)
+                window.__chess?.onMove(from, to, "");
+        }
+    }
+}
+function indexToSquare(index) {
+    const file = index % 8;
+    const rank = Math.floor(index / 8); // 0 = fila 8
+    return String.fromCharCode(97 + file) + (8 - rank);
+}
+function squareToIndex(square) {
+    if (square.length < 2)
+        return -1;
+    const file = square.charCodeAt(0) - 97;
+    const rank = 8 - Number(square[1]);
+    if (file < 0 || file > 7 || rank < 0 || rank > 7)
+        return -1;
+    return rank * 8 + file;
+}
