@@ -19,7 +19,11 @@ COPY game/ ./game/
 # BUILD_ID (sha+timestamp que fija el deploy) se hornea en el bundle vía Vite define,
 # para que el web sepa qué build es y detecte deploys nuevos (ver web/src/version.ts).
 ARG BUILD_ID=""
-RUN BUILD_ID="$BUILD_ID" npm --prefix web run build   # sync (game/bin+textures) + tsc + vite build
+# GAME_COORD: coordenada NGP del juego (kind:30023). La pasa docker-compose (mismo
+# valor que el server) y Vite la hornea como VITE_GAME_COORD. Vacía → el web cae al
+# fallback de web/src/config.ts. Ancla marcador, presencia, retos y la atestación.
+ARG GAME_COORD=""
+RUN BUILD_ID="$BUILD_ID" VITE_GAME_COORD="$GAME_COORD" npm --prefix web run build   # sync (game/bin+textures) + tsc + vite build
 
 # ---------- Stage 2: runtime (server + web/dist) ----------
 FROM node:22-slim AS runtime

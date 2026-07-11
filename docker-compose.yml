@@ -22,6 +22,11 @@ services:
         # Lo setea `npm run deploy` (sha+timestamp). Vacío en un build manual → la
         # guardia de versión del web queda inerte (no recarga).
         BUILD_ID: ${BUILD_ID:-}
+        # Coordenada NGP del juego (kind:30023): se hornea en el web acá y se pasa al
+        # server en `environment` (abajo) — MISMO valor para ambos. El default es la
+        # coordenada real del ajedrez en Luna; overrideable con la env var GAME_COORD
+        # en el shell (p. ej. `GAME_COORD=30023:... npm run deploy`).
+        GAME_COORD: ${GAME_COORD:-30023:7c45dcfb2e93594ce43bc2b16fd29b3c38ba0daf42ae8561fe6f0353892b7df4:ajedrez}
     image: ajedrez-server
     # El túnel de Luna rutea ajedrez.naranja.fit → http://ajedrez:8788 (por nombre de
     # contenedor en la red luna-negra_default). Por eso el contenedor se llama `ajedrez`
@@ -37,6 +42,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8788
+      # Coordenada NGP del juego: MISMO valor que el build del web (build.args), para
+      # que server y web anclen sus eventos a la misma coordenada. Overrideable con la
+      # env var GAME_COORD del shell. Tiene precedencia sobre .env.docker.
+      GAME_COORD: ${GAME_COORD:-30023:7c45dcfb2e93594ce43bc2b16fd29b3c38ba0daf42ae8561fe6f0353892b7df4:ajedrez}
       # El rating ELO se persiste acá (dentro del volumen `ratings`).
       RATINGS_PATH: /data/ratings.json
     volumes:

@@ -37,6 +37,6 @@ export const config = {
    *  que web/src/config.ts. Ancla la atestación kind:31338 del oráculo. Remover con
    *  attest.ts si se saca el modo de prueba. */
   gameCoord:
-    process.env.GAME_COORD ??
-    "30023:ed13c471be6bff9195a6261d8cbd6c7ab6efe79a7947b208d2b6f066b99cc4d3:ajedrez",
+    process.env.GAME_COORD?.trim() ||
+    "30023:7c45dcfb2e93594ce43bc2b16fd29b3c38ba0daf42ae8561fe6f0353892b7df4:ajedrez",
 } as const;

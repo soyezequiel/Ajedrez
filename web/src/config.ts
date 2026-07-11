@@ -16,9 +16,11 @@ export const WS_URL =
 /** Coordenada del juego en la tienda de Luna Negra (kind:30023). Ancla todos los
  *  eventos NGP: marcador, presencia y retos filtran por este `a` exacto.
  *  Fuente: GET https://luna.naranja.fit/api/store/coords → coords["ajedrez"]. */
+const ENV_GAME_COORD = (import.meta.env.VITE_GAME_COORD as string | undefined)?.trim();
 export const GAME_COORD =
-  (import.meta.env.VITE_GAME_COORD as string | undefined) ??
-  "30023:ed13c471be6bff9195a6261d8cbd6c7ab6efe79a7947b208d2b6f066b99cc4d3:ajedrez";
+  ENV_GAME_COORD && ENV_GAME_COORD.length > 0
+    ? ENV_GAME_COORD
+    : "30023:7c45dcfb2e93594ce43bc2b16fd29b3c38ba0daf42ae8561fe6f0353892b7df4:ajedrez";
 
 /** Copy visible de presencia NIP-38 ("Jugando X"). */
 export const PRESENCE_MESSAGE = "Jugando Ajedrez";
