@@ -24,6 +24,8 @@ import { createPresence, type PresenceController } from "./nostr/presence.js";
 import { sendChallenge, startChallengeInbox, toPubkeyHex } from "./nostr/challenge.js";
 import { publishNote } from "./nostr/social.js";
 import { createZapInvoice } from "./nostr/zap.js";
+// MODO DE PRUEBA (panel diag `?ngptest=1`) — remover con nostr/diag.ts.
+import { isNgpTestMode, mountDiagPanel } from "./nostr/diag.js";
 import { startVersionGuard } from "./version.js";
 import type { NgpSigner, ParsedChallenge } from "nostr-game-protocol/ngp";
 import type {
@@ -1365,3 +1367,10 @@ function toast(text: string): void {
 }
 
 start();
+
+// MODO DE PRUEBA (panel diag `?ngptest=1`) — remover con nostr/diag.ts.
+if (isNgpTestMode())
+  mountDiagPanel(net, () => ({
+    mode: login ? login.kind : null,
+    signer: login?.kind === "nostr" ? login.signer : null,
+  }));

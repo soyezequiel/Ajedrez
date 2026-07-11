@@ -17,6 +17,8 @@ import {
 } from "./nostrAuth.js";
 import { applyResult, type RatingChange } from "./ratings.js";
 import { BetError, betsEnabled, cancelBet, createBet, settleBet, watchBet } from "./bets.js";
+// MODO DE PRUEBA (panel diag) — remover junto con attest.ts.
+import { buildTestAttestation, oracleEnabled } from "./attest.js";
 import type { NgeBet } from "nostr-game-protocol/nge";
 import type { Event } from "nostr-tools/pure";
 import type { BetView, ClientMessage, RoomView, ServerMessage, SessionIdentity } from "./protocol.js";
@@ -151,8 +153,31 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
       return handleProposeBet(ws, state, msg.stakeSats);
     case "cancel_bet":
       return handleCancelBet(ws, state);
+    // MODO DE PRUEBA (panel diag) — remover junto con attest.ts.
+    case "test_attest":
+      return handleTestAttest(ws, state, msg.score);
     case "leave":
       return handleDisconnect(ws);
+  }
+}
+
+// MODO DE PRUEBA (panel diag) — remover junto con attest.ts.
+/** El oráculo firma una atestación kind:31338 del marcador del jugador; el cliente
+ *  la publica a relays. Requiere login Nostr (pubkey real) y NGP_ATTESTATION_ORACLE_NSEC. */
+async function handleTestAttest(ws: WebSocket, state: ConnState, score?: number): Promise<void> {
+  // Respondemos SIEMPRE por el canal test_attestation (evento o error) para no pisar
+  // el handler de "error" de la app y para que el panel muestre el motivo real.
+  if (!oracleEnabled())
+    return send(ws, { t: "test_attestation", event: null, error: "Oráculo no configurado en el server (falta NGP_ATTESTATION_ORACLE_NSEC)" });
+  const pubkey = state.identity?.pubkey;
+  if (!pubkey)
+    return send(ws, { t: "test_attestation", event: null, error: "Entrá con Nostr (no invitado) para atestar el marcador" });
+  const value = Number.isInteger(score) && (score as number) > 0 ? (score as number) : 1200;
+  try {
+    const event = await buildTestAttestation(pubkey, value);
+    send(ws, { t: "test_attestation", event });
+  } catch (err) {
+    send(ws, { t: "test_attestation", event: null, error: String((err as Error)?.message ?? err) });
   }
 }
 

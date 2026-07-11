@@ -32,4 +32,11 @@ export const config = {
 
   /** Gracia para reconectarse tras una desconexión antes de perder por abandono. */
   abandonGraceMs: Number(process.env.ABANDON_GRACE_MS ?? 60 * 1000),
+
+  /** MODO DE PRUEBA (panel diag): coordenada canónica del juego (kind:30023), igual
+   *  que web/src/config.ts. Ancla la atestación kind:31338 del oráculo. Remover con
+   *  attest.ts si se saca el modo de prueba. */
+  gameCoord:
+    process.env.GAME_COORD ??
+    "30023:ed13c471be6bff9195a6261d8cbd6c7ab6efe79a7947b208d2b6f066b99cc4d3:ajedrez",
 } as const;

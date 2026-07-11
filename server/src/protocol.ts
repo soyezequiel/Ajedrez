@@ -57,6 +57,9 @@ export type ClientMessage =
   | { t: "propose_bet"; stakeSats: number }
   /** Cancela la apuesta pre-fondeo. */
   | { t: "cancel_bet" }
+  /** MODO DE PRUEBA (panel diag) — remover junto con attest.ts: pide al oráculo
+   *  firmar una atestación kind:31338 del marcador verificado. */
+  | { t: "test_attest"; score?: number }
   | { t: "leave" };
 
 /** Mensajes servidor → cliente. */
@@ -79,4 +82,8 @@ export type ServerMessage =
   | { t: "draw_offer"; byNpub: string }
   | { t: "ended"; result: MatchResult; winnerNpubs: string[]; ratings?: RatingChange[] }
   /** Un jugador se desconectó (online=false, con gracia para volver) o volvió. */
-  | { t: "presence"; npub: string; online: boolean; graceMs?: number };
+  | { t: "presence"; npub: string; online: boolean; graceMs?: number }
+  /** MODO DE PRUEBA (panel diag) — remover junto con attest.ts: respuesta a
+   *  test_attest. `event` = atestación kind:31338 firmada por el oráculo (que el
+   *  cliente publica a relays), o null con `error` si no se pudo firmar. */
+  | { t: "test_attestation"; event: Event | null; error?: string };
