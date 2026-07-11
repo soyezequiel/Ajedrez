@@ -310,6 +310,7 @@ function wireNet(): void {
     }
   });
   net.on("authed", (m) => {
+    clearConnectWatchdog();
     state.identity = m.identity;
     startInbox();
     const join = pendingJoin();
@@ -511,11 +512,35 @@ function shell(inner: string): string {
   </div></div>`;
 }
 
+/** Watchdog: si autenticar no completa a tiempo, evita quedar colgado en "Conectando…". */
+let connectWatchdog: ReturnType<typeof setTimeout> | null = null;
+function clearConnectWatchdog(): void {
+  if (connectWatchdog) {
+    clearTimeout(connectWatchdog);
+    connectWatchdog = null;
+  }
+}
+
 function renderConnecting(): void {
-  app.innerHTML = shell(`<p class="muted">Conectando con el servidor…</p>`);
+  app.innerHTML = shell(`
+    <p class="muted">Conectando con el servidor…</p>
+    <div class="stack" style="margin-top:22px">
+      <button class="btn-ghost" id="conn-cancel">Elegir otro método de login</button>
+    </div>`);
+  document.getElementById("conn-cancel")!.addEventListener("click", () => renderLogin());
+  // Si el firmador no responde (extensión bloqueada, celu offline, relay lento), no
+  // dejamos al usuario atrapado: a los 12s caemos al login para que elija otra vía.
+  clearConnectWatchdog();
+  connectWatchdog = setTimeout(() => {
+    if (!state.identity) {
+      toast("No se pudo autenticar (¿el firmador no respondió?). Probá otro método.");
+      renderLogin();
+    }
+  }, 12_000);
 }
 
 function renderConnError(): void {
+  clearConnectWatchdog();
   app.innerHTML = shell(`
     <p class="muted">No se pudo conectar con el servidor de la partida.</p>
     <div class="stack" style="margin-top:24px">
@@ -545,6 +570,7 @@ function defaultLoginTab(): LoginTab {
 let qrAbort: AbortController | null = null;
 
 function renderLogin(tab: LoginTab = defaultLoginTab()): void {
+  clearConnectWatchdog();
   qrAbort?.abort();
   qrAbort = null;
   const bar = LOGIN_TABS.map(
@@ -668,6 +694,7 @@ function topbar(): string {
 // --------------------------------------------------------------- render: home
 
 function renderHome(): void {
+  clearConnectWatchdog();
   void presence?.stop();
   app.innerHTML =
     topbar() +
