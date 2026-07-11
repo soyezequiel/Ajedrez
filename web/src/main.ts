@@ -493,6 +493,7 @@ function wireNet(): void {
   });
   net.on("authed", (m) => {
     clearConnectWatchdog();
+    hideReconnectBanner(); // la sesión volvió; room/match re-habilitan el tablero
     if (m.token) writeSessionToken(m.token); // guarda/rota el token de sesión
     state.identity = m.identity;
     startInbox();
@@ -583,9 +584,15 @@ function wireNet(): void {
     // (p. ej. "Creando…" si falló la propuesta de apuesta).
     if (state.room?.phase === "lobby") patchSidePanels();
   });
+  net.on("dropped", () => {
+    toast("Se descartó una acción por la desconexión — repetila al reconectar");
+  });
   net.on("close", () => {
     if (!state.identity || !login) return renderConnError();
-    toast("Conexión perdida, reconectando…");
+    // Banner persistente (no toast: la reconexión puede tardar) y tablero bloqueado
+    // para no aceptar jugadas que se perderían mientras no hay socket.
+    showReconnectBanner();
+    board?.setInteractive(false);
     const mode = login;
     setTimeout(() => {
       net.connect();
@@ -1374,6 +1381,21 @@ setInterval(() => {
     renderPlayers();
   }
 }, 1000);
+
+const RECONNECT_BANNER_ID = "reconnect-banner";
+
+function showReconnectBanner(): void {
+  if (document.getElementById(RECONNECT_BANNER_ID)) return;
+  const el = document.createElement("div");
+  el.id = RECONNECT_BANNER_ID;
+  el.className = "reconnect-banner";
+  el.innerHTML = `<span class="spin">⟳</span>Conexión perdida — reconectando…`;
+  document.body.appendChild(el);
+}
+
+function hideReconnectBanner(): void {
+  document.getElementById(RECONNECT_BANNER_ID)?.remove();
+}
 
 function toast(text: string): void {
   const t = document.createElement("div");

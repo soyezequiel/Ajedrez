@@ -2,7 +2,7 @@ import type { ClientMessage, NostrEvent, ServerMessage } from "./protocol.js";
 
 type Handlers = {
   [M in ServerMessage as M["t"]]?: (msg: M) => void;
-} & { open?: () => void; close?: () => void };
+} & { open?: () => void; close?: () => void; dropped?: (count: number) => void };
 
 /** Cliente WebSocket tipado contra el servidor de ajedrez. */
 export class Net {
@@ -26,7 +26,10 @@ export class Net {
     });
     ws.addEventListener("close", () => {
       // Descartar intents encolados: tras reconectar hay que re-autenticar primero.
+      // Los auth_* se encolan por diseño (se mandan antes del open) — no cuentan.
+      const dropped = this.queue.filter((m) => !m.t.startsWith("auth")).length;
       this.queue = [];
+      if (dropped > 0) this.handlers.dropped?.(dropped);
       this.handlers.close?.();
     });
     ws.addEventListener("message", (e) => {
