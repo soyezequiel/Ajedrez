@@ -83,6 +83,7 @@ export type ClientMessage =
   | { t: "auth"; token: string }
   | { t: "auth_challenge" }
   | { t: "auth_nostr"; event: NostrEvent; displayName?: string }
+  | { t: "auth_token"; token: string }
   | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
   | { t: "ready" }
@@ -95,7 +96,7 @@ export type ClientMessage =
   | { t: "leave" };
 
 export type ServerMessage =
-  | { t: "authed"; identity: SessionIdentity }
+  | { t: "authed"; identity: SessionIdentity; token?: string }
   | { t: "caps"; bets: boolean }
   | { t: "challenge"; challenge: string }
   | { t: "error"; code: string; message: string }

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { verifyEvent, type Event } from "nostr-tools/pure";
 import { npubEncode } from "nostr-tools/nip19";
 
@@ -53,4 +53,62 @@ export function verifyNostrAuth(
     throw new AuthError("STALE_AUTH", "Firma de login vencida");
   if (!verifyEvent(event)) throw new AuthError("BAD_SIG", "Firma inválida");
   return { pubkey: event.pubkey, npub: npubEncode(event.pubkey) };
+}
+
+// ─── Token de sesión (evita re-firmar en cada reload, estilo cookie de Luna) ───
+
+/** Secreto para firmar los tokens. Estable si se setea AUTH_TOKEN_SECRET (así los
+ *  tokens sobreviven a redeploys); si no, aleatorio por proceso (se invalidan al
+ *  reiniciar el server → el usuario re-firma una vez). */
+const TOKEN_SECRET = process.env.AUTH_TOKEN_SECRET || randomBytes(32).toString("hex");
+const TOKEN_TTL_SEC = 30 * 24 * 3600; // 30 días, como la cookie de Luna.
+
+interface TokenPayload {
+  p: string; // pubkey hex
+  n: string; // npub
+  d: string; // displayName
+  e: number; // expiración (epoch sec)
+}
+
+function sign(body: string): string {
+  return createHmac("sha256", TOKEN_SECRET).update(body).digest("base64url");
+}
+
+/** Emite un token firmado tras un login Nostr verificado. */
+export function issueSessionToken(
+  pubkey: string,
+  npub: string,
+  displayName: string,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): string {
+  const payload: TokenPayload = { p: pubkey, n: npub, d: displayName, e: nowSec + TOKEN_TTL_SEC };
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${body}.${sign(body)}`;
+}
+
+export interface SessionFromToken extends NostrAuthResult {
+  displayName: string;
+}
+
+/** Verifica un token de sesión. Devuelve la identidad, o null si es inválido/vencido. */
+export function verifySessionToken(
+  token: string,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): SessionFromToken | null {
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = sign(body);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  let payload: TokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as TokenPayload;
+  } catch {
+    return null;
+  }
+  if (!payload.p || !payload.n || typeof payload.e !== "number" || payload.e < nowSec) return null;
+  return { pubkey: payload.p, npub: payload.n, displayName: payload.d ?? "" };
 }

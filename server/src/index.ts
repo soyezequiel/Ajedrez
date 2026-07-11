@@ -8,7 +8,13 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { config } from "./config.js";
 import { MatchError } from "./chessMatch.js";
 import { Room, RoomError, RoomManager } from "./rooms.js";
-import { AuthError, makeChallenge, verifyNostrAuth } from "./nostrAuth.js";
+import {
+  AuthError,
+  issueSessionToken,
+  makeChallenge,
+  verifyNostrAuth,
+  verifySessionToken,
+} from "./nostrAuth.js";
 import { applyResult, type RatingChange } from "./ratings.js";
 import { BetError, betsEnabled, cancelBet, createBet, settleBet, watchBet } from "./bets.js";
 import type { NgeBet } from "nostr-game-protocol/nge";
@@ -120,6 +126,7 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
   if (msg.t === "auth") return handleAuth(ws, state, msg.token);
   if (msg.t === "auth_challenge") return handleAuthChallenge(ws, state);
   if (msg.t === "auth_nostr") return handleAuthNostr(ws, state, msg.event, msg.displayName);
+  if (msg.t === "auth_token") return handleAuthToken(ws, state, msg.token);
   if (!state.identity)
     return send(ws, { t: "error", code: "UNAUTHED", message: "Autenticate primero" });
 
@@ -184,7 +191,24 @@ function handleAuthNostr(
   state.challenge = undefined;
   const name = cleanDisplayName(displayName) ?? `${npub.slice(0, 12)}…`;
   state.identity = { npub, pubkey, displayName: name, guest: false };
-  send(ws, { t: "authed", identity: state.identity });
+  const token = issueSessionToken(pubkey, npub, name);
+  send(ws, { t: "authed", identity: state.identity, token });
+  send(ws, { t: "caps", bets: betsEnabled() });
+}
+
+/**
+ * Login Nostr por token: reusa una sesión ya verificada (reload/reconexión) sin
+ * volver a firmar. El token fue emitido por el server tras un login firmado, así
+ * que el pubkey sigue siendo confiable. Rota el token en cada uso.
+ */
+function handleAuthToken(ws: WebSocket, state: ConnState, token: string): void {
+  const res = verifySessionToken(token);
+  if (!res)
+    return send(ws, { t: "error", code: "BAD_TOKEN", message: "Sesión inválida o vencida" });
+  const name = res.displayName || `${res.npub.slice(0, 12)}…`;
+  state.identity = { npub: res.npub, pubkey: res.pubkey, displayName: name, guest: false };
+  const fresh = issueSessionToken(res.pubkey, res.npub, name);
+  send(ws, { t: "authed", identity: state.identity, token: fresh });
   send(ws, { t: "caps", bets: betsEnabled() });
 }
 

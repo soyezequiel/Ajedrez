@@ -47,6 +47,7 @@ export class Net {
   authNostr(event: NostrEvent, displayName?: string) {
     this.send({ t: "auth_nostr", event, displayName });
   }
+  authToken(token: string) { this.send({ t: "auth_token", token }); }
   createRoom() { this.send({ t: "create_room" }); }
   joinRoom(opts: { roomId?: string; code?: string }) { this.send({ t: "join_room", ...opts }); }
   ready() { this.send({ t: "ready" }); }

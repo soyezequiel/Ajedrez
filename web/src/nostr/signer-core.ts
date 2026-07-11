@@ -154,7 +154,10 @@ export async function restoreSigner(): Promise<ChessSigner | null> {
   if (!stored) return null;
   try {
     if (stored.method === "nip07") {
-      if (typeof window === "undefined" || !win()) return null;
+      // Las extensiones (Alby/nos2x) inyectan window.nostr de forma ASÍNCRONA tras
+      // cargar la página. En un reload todavía no está en el primer tick: si nos
+      // rindiéramos al instante, la sesión "se cerraría" en cada recarga. Esperamos.
+      if (!(await waitForNip07(3000))) return null;
       active = createNip07Signer();
     } else if (stored.method === "local") {
       active = importNsec(stored.nsec);

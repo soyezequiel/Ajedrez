@@ -171,6 +171,38 @@ let profileFetch: Promise<unknown> | null = null;
 /** ¿Ya conocemos el perfil de esta pubkey (aunque sea "no tiene")? → no esperar. */
 let profileKnown = false;
 
+/** Token de sesión Nostr (emitido por el server): reconecta sin re-firmar, como la
+ *  cookie de Luna. Se guarda por 30 días y rota en cada authed. */
+const SESSION_TOKEN_KEY = "ajedrez.session.v1";
+function readSessionToken(): string | null {
+  try {
+    return localStorage.getItem(SESSION_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeSessionToken(token: string): void {
+  try {
+    localStorage.setItem(SESSION_TOKEN_KEY, token);
+  } catch {
+    /* storage bloqueado */
+  }
+}
+function clearSessionToken(): void {
+  try {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+/** Autentica la conexión Nostr: por token si lo hay (sin firmar), si no por challenge. */
+function sendNostrAuth(): void {
+  const token = readSessionToken();
+  if (token) net.authToken(token);
+  else net.authChallenge();
+}
+
 /**
  * Autentica con un ChessSigner ya obtenido (cualquier método: nip07/nip46/local).
  * Conecta al server DE INMEDIATO; el nombre de perfil se resuelve en paralelo
@@ -200,7 +232,7 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
     })
     .catch(() => {});
   net.connect();
-  net.authChallenge();
+  sendNostrAuth();
 }
 
 /**
@@ -265,6 +297,7 @@ function loginLocal(nsec?: string): void {
 /** Cierra la sesión (Nostr o invitado) y vuelve al login. */
 function logout(): void {
   clearActiveSigner();
+  clearSessionToken();
   sessionStorage.removeItem(NAME_KEY);
   login = null;
   state.identity = null;
@@ -358,6 +391,7 @@ function wireNet(): void {
   });
   net.on("authed", (m) => {
     clearConnectWatchdog();
+    if (m.token) writeSessionToken(m.token); // guarda/rota el token de sesión
     state.identity = m.identity;
     startInbox();
     const join = pendingJoin();
@@ -419,6 +453,12 @@ function wireNet(): void {
     }
   });
   net.on("error", (m) => {
+    // Token de sesión vencido/inválido: lo descartamos y re-autenticamos firmando.
+    if (m.code === "BAD_TOKEN") {
+      clearSessionToken();
+      if (login?.kind === "nostr") net.authChallenge();
+      return;
+    }
     if (m.code === "NO_ROOM" && state.room) {
       state.room = null;
       state.match = null;
@@ -439,9 +479,9 @@ function wireNet(): void {
     const mode = login;
     setTimeout(() => {
       net.connect();
-      // Invitado: re-auth por nombre (sin fricción). Nostr: re-firmar el reto.
+      // Invitado: re-auth por nombre. Nostr: por token si lo hay (sin re-firmar).
       if (mode.kind === "guest") net.auth(mode.name);
-      else net.authChallenge();
+      else sendNostrAuth();
     }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
   });

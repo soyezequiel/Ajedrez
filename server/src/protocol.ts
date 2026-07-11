@@ -42,6 +42,8 @@ export type ClientMessage =
   | { t: "auth_challenge" }
   /** Login Nostr: evento kind:22242 firmado sobre el reto + display name best-effort. */
   | { t: "auth_nostr"; event: Event; displayName?: string }
+  /** Re-login por token de sesión (evita re-firmar en cada reload/reconexión). */
+  | { t: "auth_token"; token: string }
   | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
   | { t: "ready" }
@@ -57,7 +59,8 @@ export type ClientMessage =
 
 /** Mensajes servidor → cliente. */
 export type ServerMessage =
-  | { t: "authed"; identity: SessionIdentity }
+  /** `token`: solo en login Nostr — sesión reutilizable para reconectar sin firmar. */
+  | { t: "authed"; identity: SessionIdentity; token?: string }
   /** Capacidades del server (p. ej. si el escrow de apuestas está activo). */
   | { t: "caps"; bets: boolean }
   /** Reto a firmar para el login Nostr (NIP-42). */
