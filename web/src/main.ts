@@ -41,6 +41,33 @@ import type {
 
 const NAME_KEY = "ajedrez.name.v1";
 
+/** Sala actual persistida por pestaña: un F5 en el lobby/partida re-une a la sala
+ *  (el server re-admite por identidad estable y cancela el timer de abandono).
+ *  sessionStorage a propósito: dos pestañas de prueba no se pisan entre sí. */
+const ROOM_KEY = "ajedrez.room.v1";
+
+function readSavedRoom(): string | null {
+  try {
+    return sessionStorage.getItem(ROOM_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeSavedRoom(roomId: string): void {
+  try {
+    sessionStorage.setItem(ROOM_KEY, roomId);
+  } catch {
+    /* storage bloqueado */
+  }
+}
+function clearSavedRoom(): void {
+  try {
+    sessionStorage.removeItem(ROOM_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
 /** Cómo está autenticado el jugador en esta sesión (para re-auth al reconectar). */
 type LoginMode =
   | { kind: "guest"; name: string }
@@ -372,6 +399,7 @@ function loginLocal(nsec?: string): void {
 function logout(): void {
   clearActiveSigner();
   clearSessionToken();
+  clearSavedRoom();
   sessionStorage.removeItem(NAME_KEY);
   login = null;
   state.identity = null;
@@ -469,14 +497,19 @@ function wireNet(): void {
     state.identity = m.identity;
     startInbox();
     const join = pendingJoin();
+    const saved = readSavedRoom();
     cleanUrl();
     if (state.room) net.joinRoom({ roomId: state.room.id }); // reconexión: volver a la sala
     else if (join) net.enterRoom(join); // ?join: unir-o-crear (invite propio o Room Link)
+    // F5 / bfcache: re-unirse a la sala guardada. joinRoom (no enterRoom): si la
+    // sala murió queremos NO_ROOM → home, no re-crearla lazy como fantasma.
+    else if (saved) net.joinRoom({ roomId: saved });
     else renderHome();
   });
   net.on("room", (m) => {
     const wasInRoom = state.room !== null;
     state.room = m.room;
+    writeSavedRoom(m.room.id);
     if (m.room.phase === "lobby") { state.ready = false; state.history = []; }
     maybeSendPendingChallenge(m.room);
     if (!wasInRoom) enterGame();
@@ -533,7 +566,10 @@ function wireNet(): void {
       if (login?.kind === "nostr") net.authChallenge();
       return;
     }
-    if (m.code === "NO_ROOM" && state.room) {
+    // Sala inexistente: por reconexión, por F5 con sala guardada muerta, o por
+    // código equivocado. En todos los casos: olvidarla y volver al inicio.
+    if (m.code === "NO_ROOM") {
+      clearSavedRoom();
       state.room = null;
       state.match = null;
       state.ended = null;
@@ -1253,7 +1289,7 @@ function wireSidePanels(): void {
   on("resign", () => net.resign());
   on("offer-draw", () => { net.offerDraw(); toast("Tablas ofrecidas"); });
   on("accept-draw", () => net.acceptDraw());
-  on("home", () => location.reload());
+  on("home", () => { clearSavedRoom(); location.reload(); });
   on("share-achievement", () => {
     if (login?.kind !== "nostr") return;
     const btn = document.getElementById("share-achievement") as HTMLButtonElement | null;
