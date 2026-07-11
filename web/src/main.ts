@@ -224,12 +224,12 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
   if (token) {
     // Reconexión/reload: autenticamos por TOKEN sin bloquear en el firmador. La
     // extensión puede tardar o directamente colgarse en getPublicKey; la sesión no
-    // debe depender de eso. El signer queda listo para features (marcador, retos);
-    // su pubkey/perfil se resuelven en segundo plano.
+    // debe depender de eso. El signer queda listo para features (marcador, retos)
+    // pero NO lo tocamos al cargar: llamar getPublicKey acá dispara el popup de la
+    // extensión (Alby) en cada apertura. Prompta recién cuando el usuario firma algo.
     login = { kind: "nostr", signer: toNgpSigner(signer), displayName: "" };
     net.connect();
     net.authToken(token);
-    resolveProfileInBackground(signer);
     return;
   }
   // Primer login (sin token todavía): necesitamos la pubkey y firmar el challenge.
@@ -300,30 +300,11 @@ function authViaToken(token: string): void {
   net.authToken(token);
   restorePromise
     .then((s) => {
-      if (s && login?.kind === "nostr") {
-        login.signer = toNgpSigner(s); // reemplaza el perezoso por el real
-        resolveProfileInBackground(s);
-      }
-    })
-    .catch(() => {});
-}
-
-/** Resuelve pubkey + nombre de perfil en segundo plano (no bloquea la sesión por token). */
-function resolveProfileInBackground(signer: ChessSigner): void {
-  signer
-    .getPublicKey()
-    .then((pubkey) => {
-      updateStoredPubkey(pubkey);
-      const cached = readCachedProfile(pubkey);
-      if (cached.name && login?.kind === "nostr" && !login.displayName) login.displayName = cached.name;
-      if (!cached.known) {
-        void fetchProfile(pubkey)
-          .then((p) => {
-            writeCachedProfile(pubkey, p.name);
-            if (p.name && login?.kind === "nostr" && !login.displayName) login.displayName = p.name;
-          })
-          .catch(() => {});
-      }
+      // Reemplazamos el firmador perezoso por el real para las features, pero NO
+      // llamamos getPublicKey/perfil acá: la sesión ya vale por token y hacerlo
+      // dispararía el popup de la extensión (Alby) en cada carga de la página. La
+      // extensión prompta recién cuando el usuario hace algo que firma.
+      if (s && login?.kind === "nostr") login.signer = toNgpSigner(s);
     })
     .catch(() => {});
 }
