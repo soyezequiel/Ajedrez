@@ -108,25 +108,20 @@ export class ChessMatch {
     return this.snapshot();
   }
 
-  /** Un jugador abandonó la sala / se desconectó sin volver. El rival gana. */
-  forfeit(by: Npub): MatchSnapshot {
-    if (this.isOver) return this.snapshot();
-    const color = this.colorOf(by);
-    if (!color) throw new MatchError("NOT_A_PLAYER", "No sos jugador de esta partida");
-    this.result =
-      color === "w"
-        ? { kind: "black_win", by: "abandon" }
-        : { kind: "white_win", by: "abandon" };
-    return this.snapshot();
+  /** Tiempo restante (ms) del jugador en turno, sin mutar estado. */
+  turnRemainingMs(now = Date.now()): number {
+    const clock = this.chess.turn() === "w" ? this.whiteClockMs : this.blackClockMs;
+    return Math.max(0, clock - Math.max(0, now - this.turnStartedAt));
   }
 
   /**
-   * Verifica el reloj del jugador en turno sin que haya jugada (llamar en un tick).
-   * Si se le acabó el tiempo, declara timeout. Devuelve el snapshot.
+   * Cobra el reloj del jugador en turno aunque no haya movido. Si se quedó sin
+   * tiempo devuelve el snapshot terminal (timeout); si no, null. Permite que el
+   * servidor cierre la partida cuando el reloj vence sin esperar una jugada.
    */
-  tickClock(now = Date.now()): MatchSnapshot {
-    if (!this.isOver) this.chargeClock(now);
-    return this.snapshot();
+  checkTimeout(now = Date.now()): MatchSnapshot | null {
+    if (this.isOver) return null;
+    return this.chargeClock(now) ? this.snapshot() : null;
   }
 
   /**
@@ -179,17 +174,7 @@ export class ChessMatch {
     }
   }
 
-  /** Jugadas legales desde una casilla (para resaltar en el cliente). */
-  legalMovesFrom(square: string): string[] {
-    return this.chess
-      .moves({ square: square as never, verbose: true })
-      .map((m) => (typeof m === "string" ? m : m.to));
-  }
-
-  /**
-   * Ganadores en términos de npub para reportar a Luna Negra:
-   * un ganador → [npub]; tablas → [] (reembolso total).
-   */
+  /** Ganador(es) de la partida: uno → [npub]; tablas → []. */
   winnerNpubs(): Npub[] {
     switch (this.result.kind) {
       case "white_win":

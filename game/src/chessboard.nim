@@ -44,6 +44,16 @@ proc squareName*(file, rank: int): string =
   $chr(ord('a') + file) & $(Ranks - rank)
 
 
+## Inversa de squareName: "e2" → (file, rank desde arriba). none si es inválida.
+proc parseSquare*(s: string): Option[tuple[file, rank: int]] =
+  if s.len < 2: return none(tuple[file, rank: int])
+  let file = ord(s[0]) - ord('a')
+  let digit = ord(s[1]) - ord('0')
+  if file < 0 or file >= Files or digit < 1 or digit > Ranks:
+    return none(tuple[file, rank: int])
+  some((file: file, rank: Ranks - digit))
+
+
 ## Centro de una casilla en coords de la cámara ortográfica (origen al centro,
 ## +y hacia arriba), con blancas abajo. `cell` = lado de casilla en px.
 proc squareCenter*(file, rank: int, board: float32): tuple[x, y: float32] =

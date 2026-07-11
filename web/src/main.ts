@@ -3,39 +3,32 @@ import { WS_URL } from "./config.js";
 import { Net } from "./net.js";
 import { createBoard, type BoardController, type BoardKind, type MoveFn } from "./board.js";
 import type {
-  BetInfo,
   Color,
-  Friend,
   MatchSnapshot,
   RoomView,
   SessionIdentity,
 } from "./protocol.js";
 
-const TOKEN_KEY = "ajedrez.token.v1";
-const ID_KEY = "ajedrez.identity.v1";
+const NAME_KEY = "ajedrez.name.v1";
 
 const app = document.getElementById("app")!;
 const net = new Net(WS_URL);
 
 interface State {
   identity: SessionIdentity | null;
-  friends: Friend[];
   room: RoomView | null;
   match: MatchSnapshot | null;
   matchReceivedAt: number;
-  bet: BetInfo | null;
   ready: boolean;
   drawOfferBy: string | null;
-  ended: { winnerNpubs: string[]; betId: string | null; text: string } | null;
+  ended: { winnerNpubs: string[]; text: string } | null;
 }
 
 const state: State = {
   identity: null,
-  friends: [],
   room: null,
   match: null,
   matchReceivedAt: 0,
-  bet: null,
   ready: false,
   drawOfferBy: null,
   ended: null,
@@ -49,13 +42,8 @@ function boardKind(): BoardKind {
 
 // --------------------------------------------------------------- arranque
 
-function resolveToken(): string | null {
-  const params = new URLSearchParams(location.search);
-  const lnToken = params.get("lnToken");
-  if (lnToken) return lnToken;
-  const demo = params.get("lnDemo");
-  if (demo) return "lndemo:" + demo;
-  return sessionStorage.getItem(TOKEN_KEY);
+function storedName(): string | null {
+  return sessionStorage.getItem(NAME_KEY);
 }
 
 function pendingJoin(): string | null {
@@ -64,36 +52,32 @@ function pendingJoin(): string | null {
 
 function start(): void {
   wireNet();
-  const token = resolveToken();
-  if (!token) return renderLogin();
+  const name = storedName();
+  if (!name) return renderLogin();
   renderConnecting();
   net.connect();
-  net.auth(token);
+  net.auth(name);
 }
 
 function loginWith(name: string): void {
-  const token = "lndemo:" + name.trim();
-  sessionStorage.setItem(TOKEN_KEY, token);
+  sessionStorage.setItem(NAME_KEY, name.trim());
   net.connect();
-  net.auth(token);
+  net.auth(name.trim());
 }
 
 // --------------------------------------------------------------- net
 
 function wireNet(): void {
+  net.on("open", () => {
+    reconnectDelay = 1000;
+  });
   net.on("authed", (m) => {
     state.identity = m.identity;
-    sessionStorage.setItem(TOKEN_KEY, resolveToken() ?? "");
-    localStorage.setItem(ID_KEY, JSON.stringify(m.identity));
-    cleanUrl();
     const join = pendingJoin();
-    if (join) net.joinRoom({ roomId: join });
+    cleanUrl();
+    if (state.room) net.joinRoom({ roomId: state.room.id }); // reconexión: volver a la sala
+    else if (join) net.joinRoom({ roomId: join });
     else renderHome();
-  });
-  net.on("friends", (m) => {
-    state.friends = m.friends;
-    if (!state.room) renderHome();
-    else patchSidePanels();
   });
   net.on("room", (m) => {
     const wasInRoom = state.room !== null;
@@ -109,31 +93,55 @@ function wireNet(): void {
     renderBoardFromMatch();
     patchGame();
   });
-  net.on("bet", (m) => {
-    state.bet = m.bet;
-    patchSidePanels();
-  });
   net.on("draw_offer", (m) => {
     state.drawOfferBy = m.byNpub;
     patchSidePanels();
   });
   net.on("ended", (m) => {
-    state.ended = { winnerNpubs: m.winnerNpubs, betId: m.betId, text: endedText(m.winnerNpubs) };
+    state.ended = { winnerNpubs: m.winnerNpubs, text: endedText(m.winnerNpubs) };
     if (board) board.setInteractive(false);
     patchGame();
   });
-  net.on("error", (m) => toast(`${m.code}: ${m.message}`));
+  net.on("presence", (m) => {
+    if (m.npub === state.identity?.npub) return;
+    if (m.online) toast(`${nameOf(m.npub)} volvió a la partida`);
+    else {
+      const secs = Math.round((m.graceMs ?? 0) / 1000);
+      toast(`${nameOf(m.npub)} se desconectó — tiene ${secs}s para volver`);
+    }
+  });
+  net.on("error", (m) => {
+    // La sala ya no existe (p. ej. el server se reinició): volver al inicio.
+    if (m.code === "NO_ROOM" && state.room) {
+      state.room = null;
+      state.match = null;
+      state.ended = null;
+      toast("La sala ya no existe");
+      renderHome();
+      return;
+    }
+    toast(`${m.code}: ${m.message}`);
+  });
   // Si el socket se cae ANTES de autenticar (server caído, wss mal apuntado),
-  // mostramos un estado claro en vez de dejar la pantalla en blanco.
+  // mostramos un estado claro. Con sesión activa, reintentamos con backoff:
+  // al reconectar, `authed` nos devuelve a la sala y el server nos re-sincroniza.
   net.on("close", () => {
-    if (!state.identity) renderConnError();
+    const name = storedName();
+    if (!state.identity || !name) return renderConnError();
+    toast("Conexión perdida, reconectando…");
+    setTimeout(() => {
+      net.connect();
+      net.auth(name);
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
   });
 }
 
+/** Backoff de reconexión (se resetea cuando el socket vuelve a abrir). */
+let reconnectDelay = 1000;
+
 function cleanUrl(): void {
   const url = new URL(location.href);
-  url.searchParams.delete("lnToken");
-  url.searchParams.delete("lnDemo");
   url.searchParams.delete("join");
   history.replaceState(null, "", url.toString());
 }
@@ -147,17 +155,13 @@ function myColor(): Color | null {
   return seat?.color ?? null;
 }
 
-function isHost(): boolean {
-  return state.identity?.npub === state.room?.hostNpub;
-}
-
 function nameOf(npub: string): string {
   const p = state.room?.players.find((x) => x.npub === npub);
-  return p?.displayName ?? state.friends.find((f) => f.npub === npub)?.displayName ?? npub.slice(0, 10);
+  return p?.displayName ?? npub.slice(0, 10);
 }
 
 function endedText(winners: string[]): string {
-  if (winners.length === 0) return "Tablas — depósitos reembolsados";
+  if (winners.length === 0) return "Tablas";
   const me = state.identity?.npub;
   if (me && winners.includes(me)) return "¡Ganaste!";
   return `Ganó ${nameOf(winners[0]!)}`;
@@ -191,14 +195,11 @@ function renderLogin(): void {
   app.innerHTML = `
     <div class="center-screen"><div class="login">
       <h1>♞ <span class="accent">Ajedrez</span></h1>
-      <p class="muted">Apostá sats y jugá. Entrá con un nombre (modo dev).</p>
+      <p class="muted">Entrá con un nombre y jugá una partida 1v1.</p>
       <div class="row" style="margin-top:18px">
         <input id="name" placeholder="Tu nombre" />
         <button class="primary" id="go">Entrar</button>
       </div>
-      <p class="muted" style="margin-top:14px;font-size:12px">
-        En producción Luna Negra abre el juego con tu identidad (?lnToken=).
-      </p>
     </div></div>`;
   const input = document.getElementById("name") as HTMLInputElement;
   const go = () => input.value.trim() && loginWith(input.value);
@@ -216,8 +217,7 @@ function topbar(): string {
     <div class="topbar">
       <span class="brand">♞ <span class="accent">Ajedrez</span></span>
       <span class="spacer"></span>
-      ${id ? `<span class="me"><span class="avatar">${initials}</span>${id.displayName}
-        ${id.source === "mock" ? '<span class="pill">dev</span>' : ""}</span>` : ""}
+      ${id ? `<span class="me"><span class="avatar">${initials}</span>${id.displayName}</span>` : ""}
     </div>`;
 }
 
@@ -230,10 +230,6 @@ function renderHome(): void {
       <div class="card">
         <h2>Jugar</h2>
         <div class="row">
-          <input id="stake" type="number" min="0" step="1" value="0" />
-          <span class="muted">sats de apuesta</span>
-        </div>
-        <div class="row" style="margin-top:12px">
           <button class="primary" id="create">Crear sala</button>
         </div>
         <h2 style="margin-top:24px">Unirse por código</h2>
@@ -242,33 +238,13 @@ function renderHome(): void {
           <button id="join">Entrar</button>
         </div>
       </div>
-      <div class="card" id="friends">${friendsHtml()}</div>
     </div>`;
 
-  document.getElementById("create")!.addEventListener("click", () => {
-    const stake = Number((document.getElementById("stake") as HTMLInputElement).value) || 0;
-    net.createRoom(stake);
-  });
+  document.getElementById("create")!.addEventListener("click", () => net.createRoom());
   document.getElementById("join")!.addEventListener("click", () => {
     const code = (document.getElementById("code") as HTMLInputElement).value.trim().toUpperCase();
     if (code) net.joinRoom({ code });
   });
-}
-
-function friendsHtml(): string {
-  const order = { "in-game": 0, online: 1, offline: 2 } as const;
-  const sorted = [...state.friends].sort((a, b) => order[a.presence] - order[b.presence]);
-  const rows = sorted
-    .map(
-      (f) => `<div class="friend">
-        <span class="dot ${f.presence}"></span>
-        <span>${f.displayName}</span>
-        <span class="spacer"></span>
-        ${state.room && f.presence !== "offline" ? `<button data-invite="${f.npub}">Invitar</button>` : ""}
-      </div>`,
-    )
-    .join("");
-  return `<h2>Amigos de Luna Negra</h2>${rows || '<p class="muted">Sin amigos conectados.</p>'}`;
 }
 
 // --------------------------------------------------------------- render: partida
@@ -339,53 +315,23 @@ function phasePanelHtml(): string {
   const room = state.room!;
   if (state.ended) return endedPanel();
   if (room.phase === "playing") return playingPanel();
-  if (room.phase === "awaiting_deposit") return betPanel();
   return lobbyPanel();
 }
 
 function lobbyPanel(): string {
   const room = state.room!;
   const full = room.players.length >= 2;
-  const stakeRow = isHost()
-    ? `<div class="row" style="margin-top:10px">
-         <input id="stake2" type="number" min="0" value="${room.stakeSats}" />
-         <button id="setstake">Apuesta</button>
-       </div>`
-    : `<p class="muted">Apuesta: ${room.stakeSats} sats</p>`;
+  const inviteUrl = `${location.origin}/?join=${encodeURIComponent(room.id)}`;
   return `<div class="card">
     <h2>Sala ${room.code}</h2>
-    <p class="muted">Compartí el link o el código para que entre tu rival.</p>
-    <div class="row"><input id="invite-url" readonly value="${room.inviteUrl}" /><button id="copy">Copiar</button></div>
-    ${stakeRow}
+    <p class="muted">Compartí el link o el código para que entre tu rival (tiene que usar OTRO nombre).</p>
+    <div class="row"><input id="invite-url" readonly value="${inviteUrl}" /><button id="copy">Copiar</button></div>
     <div class="row" style="margin-top:14px">
       <button class="primary" id="ready" ${!full || state.ready ? "disabled" : ""}>
         ${state.ready ? "Esperando al rival…" : full ? "Listo" : "Falta el rival"}
       </button>
     </div>
   </div>`;
-}
-
-function betPanel(): string {
-  const bet = state.bet;
-  if (!bet) return `<div class="card"><p class="muted">Preparando la apuesta…</p></div>`;
-  const me = state.identity?.npub;
-  const mine = bet.participants.find((p) => p.npub === me);
-  const handles =
-    mine && mine.depositStatus === "pending"
-      ? `<p class="muted" style="margin-top:10px">Depositá ${state.room!.stakeSats} sats:</p>
-         ${mine.payUrl ? `<a href="${mine.payUrl}" target="_blank"><button class="primary">Pagar con wallet</button></a>` : ""}
-         ${mine.bolt11 ? `<p class="deposit">${mine.bolt11}</p>` : ""}
-         ${mine.lnurl ? `<p class="deposit">${mine.lnurl}</p>` : ""}`
-      : `<p class="muted" style="margin-top:10px">Tu depósito está confirmado ✓</p>`;
-  const rows = bet.participants
-    .map((p) => `<div class="row"><span>${nameOf(p.npub)}</span><span class="spacer"></span>
-      <span class="pill">${p.depositStatus === "paid" ? "pagó ✓" : "pendiente…"}</span></div>`)
-    .join("");
-  return `<div class="card"><div class="bet">
-    <div class="pot">${bet.potTargetSats} sats</div>
-    <p class="muted">Pozo · fee ${bet.feeSats} · gana ${bet.netPayoutSats}</p>
-    ${rows}${handles}
-  </div></div>`;
 }
 
 function playingPanel(): string {
@@ -395,7 +341,6 @@ function playingPanel(): string {
     ? `<p class="status check">¡Jaque!</p>`
     : `<p class="status">${m?.turn === myColor() ? "Tu turno" : "Turno del rival"}</p>`;
   return `<div class="card">
-    ${state.bet ? `<div class="bet" style="margin-bottom:14px"><div class="pot">${state.bet.potTargetSats} sats</div><p class="muted">en juego</p></div>` : ""}
     ${status}
     <div class="row">
       <button class="danger" id="resign">Abandonar</button>
@@ -416,16 +361,9 @@ function endedPanel(): string {
 
 function wireSidePanels(): void {
   const on = (id: string, fn: () => void) => document.getElementById(id)?.addEventListener("click", fn);
-  document.querySelectorAll<HTMLButtonElement>("[data-invite]").forEach((b) =>
-    b.addEventListener("click", () => net.inviteFriend(b.dataset.invite!)),
-  );
   on("copy", () => {
     const el = document.getElementById("invite-url") as HTMLInputElement | null;
     if (el) navigator.clipboard.writeText(el.value).then(() => toast("Link copiado"));
-  });
-  on("setstake", () => {
-    const v = Number((document.getElementById("stake2") as HTMLInputElement).value) || 0;
-    net.setStake(v);
   });
   on("ready", () => { state.ready = true; net.ready(); patchSidePanels(); });
   on("resign", () => net.resign());

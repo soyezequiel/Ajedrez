@@ -10,7 +10,7 @@
 # Ajustá WorkingDirectory, User y la ruta de node a tu VPS.
 
 [Unit]
-Description=Ajedrez server (autoridad WebSocket + Luna Negra)
+Description=Ajedrez server (autoridad WebSocket)
 After=network-online.target
 Wants=network-online.target
 

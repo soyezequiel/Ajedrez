@@ -1,10 +1,12 @@
-// URL del WebSocket del servidor de ajedrez. Override con VITE_WS_URL.
+// URL del WebSocket del servidor de ajedrez.
+//   - Deploy unificado (el server sirve este web): se deriva del origen actual,
+//     así funciona en localhost y en LAN (con la IP del host) sin reconfigurar.
+//   - Dev con Vite en :5173 (server aparte en :8787): se fija con VITE_WS_URL
+//     (ver web/.env.development).
+function sameOriginWs(): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}`;
+}
+
 export const WS_URL =
-  (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8787";
-
-// Base de Luna Negra (para el leaderboard "Top", §6). Override con VITE_LUNA_URL.
-export const LUNA_URL =
-  (import.meta.env.VITE_LUNA_URL as string | undefined) ??
-  "https://moon21.vercel.app";
-
-export const LEADERBOARD = "ajedrez";
+  (import.meta.env.VITE_WS_URL as string | undefined) ?? sameOriginWs();

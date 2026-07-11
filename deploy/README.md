@@ -1,27 +1,21 @@
 # Deploy del server de ajedrez en un VPS
 
 El server (`server/`) es la **autoridad**: valida jugadas, lleva el reloj, declara
-ganadores y habla server-to-server con Luna Negra (guarda la API key `ln_sk_…`).
-Es un proceso WebSocket de larga vida → **no entra en Vercel** (que solo sirve el
-`web/` estático). Por eso va en un VPS.
+ganadores **y sirve el build del `web/`** (HTTP + WebSocket en el mismo puerto). Es un
+proceso de larga vida → va en un VPS. Como sirve el web él mismo, **no hace falta
+Vercel** ni ningún hosting estático aparte.
 
-> **Por qué hace falta esto:** en producción el web de Vercel (`https`) abre un
-> WebSocket. Si ese WS apunta a `ws://localhost:8787` (el default) o a un server
-> que no existe, cuando Luna Negra abre el juego con `?lnToken=` el shell se saltea
-> el login y queda esperando el `authed` que nunca llega → **pantalla en blanco**.
-> Desplegar el server con `wss://` arregla eso.
+> Este runbook aplica si querés exponerlo en internet con TLS. Para jugar en tu
+> propia máquina o en la LAN alcanza con `npm start` desde la raíz (ver README raíz).
 
 ```
-Luna Negra (moon21)  ──abre con ?lnToken──►  web en Vercel (https)
-                                                   │  WebSocket
-                                                   ▼
-                                   wss://TU-HOST   ◄── Caddy (TLS + WS upgrade)
-                                                   │  reverse_proxy
-                                                   ▼
-                                   Node server :8787 (este VPS)
-                                                   │  server-to-server (Bearer ln_sk_…)
-                                                   ▼
-                                          moon21.vercel.app (Luna Negra API)
+  navegador (https)
+       │  HTTP + WebSocket (mismo origen)
+       ▼
+  https://TU-HOST   ◄── Caddy (TLS + WS upgrade)
+       │  reverse_proxy
+       ▼
+  Node server :8787 (este VPS: sirve web/dist + WS)
 ```
 
 ## Requisitos en el VPS
@@ -41,38 +35,28 @@ Luna Negra (moon21)  ──abre con ?lnToken──►  web en Vercel (https)
 ```bash
 sudo mkdir -p /opt/ajedrez
 sudo chown $USER /opt/ajedrez
-# desde tu máquina (o git clone en el VPS):
-rsync -av --exclude node_modules --exclude .env ./server /opt/ajedrez/
+# desde tu máquina (o git clone en el VPS): necesitás server/, web/ y game/
+rsync -av --exclude node_modules --exclude dist --exclude .env \
+  ./server ./web ./game ./package.json /opt/ajedrez/
 ```
 
-### 2. Instalar dependencias
+### 2. Instalar dependencias y buildear el web
 
 ```bash
-cd /opt/ajedrez/server
-npm ci          # instala también tsx (devDependency) para correr en prod
+cd /opt/ajedrez
+npm run install:all       # deps de server/ y web/
+npm run build             # genera web/dist (el server lo va a servir)
 ```
 
-### 3. Crear el `.env` con las credenciales reales
+### 3. Crear el `.env`
 
-`server/.env` **no** se commitea (está gitignoreado). Crealo en el VPS con los
-mismos valores que tu `.env` local:
+`server/.env` **no** se commitea (está gitignoreado). Crealo en el VPS:
 
 ```bash
 cat > /opt/ajedrez/server/.env <<'EOF'
-LUNA_API_KEY=ln_sk_...              # la API key real (SOLO vive en el server)
-LUNA_GAME_ID=cmql3lhb300o9lg04xsopxa9s
-LUNA_WEBHOOK_SECRET=...
-LUNA_BASE_URL=https://moon21.vercel.app
 PORT=8787
-PUBLIC_WEB_URL=https://TU-WEB.vercel.app   # para armar los inviteUrl de las salas
 EOF
 chmod 600 /opt/ajedrez/server/.env
-```
-
-Verificá que las credenciales funcionan **antes** de exponer nada:
-
-```bash
-npm run verify:luna     # debe dar "LIVE OK" contra moon21
 ```
 
 ### 4. Levantar el server como servicio
@@ -83,10 +67,10 @@ sudo chown -R ajedrez /opt/ajedrez
 sudo cp deploy/ajedrez-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now ajedrez-server
-journalctl -u ajedrez-server -f     # deberías ver: "server en :8787 · Luna Negra LIVE"
+journalctl -u ajedrez-server -f     # deberías ver: "http://localhost:8787 · sirviendo web/dist"
 ```
 
-Probalo local en el VPS: `curl localhost:8787/health` → `{"ok":true,"lunaLive":true,...}`
+Probalo local en el VPS: `curl localhost:8787/health` → `{"ok":true,"rooms":0}`
 
 ### 5. Reverse proxy con TLS (Caddy)
 
@@ -96,48 +80,29 @@ sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-Probá desde **afuera** del VPS que el WSS responde:
+Probá desde **afuera** del VPS que responde por https:
 
 ```bash
 curl https://TU-HOST/health      # mismo JSON, ahora por https
 ```
 
-### 6. Apuntar el web de Vercel al server
+### 6. Verificar end-to-end
 
-En el proyecto de Vercel del `web/`, agregá la variable de entorno:
+Abrí `https://TU-HOST` en el navegador. El server sirve el web y el WebSocket se
+deriva del mismo origen (`wss://TU-HOST`) automáticamente — no hay que configurar
+ninguna URL. Debería pedirte un nombre y mostrar el home; en los logs del server
+(`journalctl -u ajedrez-server -f`) vas a ver la conexión.
 
-```
-VITE_WS_URL = wss://TU-HOST
-```
-
-…y hacé **Redeploy** (Vite hornea la URL en build; sin redeploy sigue con
-`ws://localhost:8787`). Para verificar qué quedó horneado:
-
-```bash
-# en el build: debe aparecer wss://TU-HOST, NO ws://localhost
-grep -o "wss\?://[^\"']*" web/dist/assets/*.js
-```
-
-### 7. Verificar end-to-end desde Luna Negra
-
-Abrí el juego desde moon21. Ahora debería:
-1. Conectar el WS (`wss://TU-HOST`).
-2. Canjear el `lnToken` → `GET /api/v1/session` → identidad real (`source: "luna-negra"`).
-3. Mostrar el home en vez de pantalla en blanco.
-
-En los logs del server (`journalctl -u ajedrez-server -f`) vas a ver la conexión.
+> **Actualizar el web:** cuando cambies el código, en el VPS corré `git pull`
+> (o re-`rsync`), `npm run build` y `sudo systemctl restart ajedrez-server`.
 
 ---
 
 ## Notas
 
-- **Webhook de Luna Negra:** hoy el webhook del proveedor apunta a otra app
-  (`tetras.vercel.app`), no a `https://TU-HOST/webhook`. No bloquea: los depósitos
-  de apuestas se detectan igual por **polling** (`pollDeposits`, cada 3s). El
-  webhook es solo una optimización; decisión pendiente para M6.
-- **Origen del WS:** el `WebSocketServer` hoy acepta cualquier origen. Para
-  endurecer, más adelante conviene un allowlist de `Origin` (tu dominio de Vercel)
-  en `wss.on("connection")`.
+- **Origen del WS:** el `WebSocketServer` hoy acepta cualquier origen. Como el web
+  se sirve mismo-origen esto casi no importa, pero para endurecer conviene un
+  allowlist de `Origin` (tu dominio) en `wss.on("connection")`.
 - **Estado en memoria:** las salas viven en RAM (`RoomManager`). Un restart del
   server tira las partidas en curso. Aceptable para empezar; persistencia = trabajo
   futuro.

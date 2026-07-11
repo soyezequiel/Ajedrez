@@ -75,7 +75,7 @@ describe("ChessMatch — finales", () => {
     expect(m.winnerNpubs()).toEqual([BLACK]);
   });
 
-  it("tablas por acuerdo → sin ganadores (reembolso)", () => {
+  it("tablas por acuerdo → sin ganadores", () => {
     const m = newMatch();
     const snap = m.agreeDraw();
     expect(snap.result.kind).toBe("draw");
@@ -88,13 +88,21 @@ describe("ChessMatch — finales", () => {
     expect(snap.result).toEqual({ kind: "black_win", by: "timeout" });
     expect(m.winnerNpubs()).toEqual([BLACK]);
   });
-});
 
-describe("ChessMatch — ayudas de UI", () => {
-  it("lista jugadas legales desde una casilla", () => {
-    const m = newMatch();
-    const moves = m.legalMovesFrom("e2");
-    expect(moves).toContain("e3");
-    expect(moves).toContain("e4");
+  it("checkTimeout: cierra la partida sin esperar una jugada", () => {
+    const m = newMatch(1000, 0);
+    expect(m.checkTimeout(500)).toBeNull(); // todavía le queda tiempo
+    expect(m.isOver).toBe(false);
+    const snap = m.checkTimeout(1500);
+    expect(snap?.result).toEqual({ kind: "black_win", by: "timeout" });
+    expect(m.isOver).toBe(true);
+    expect(m.checkTimeout(2000)).toBeNull(); // ya terminada: no-op
+  });
+
+  it("turnRemainingMs: informa el tiempo vivo del jugador en turno", () => {
+    const m = newMatch(1000, 0);
+    expect(m.turnRemainingMs(400)).toBe(600);
+    m.move(WHITE, { from: "e2", to: "e4" }, 400); // turno de negras, reloj lleno
+    expect(m.turnRemainingMs(700)).toBe(700);
   });
 });

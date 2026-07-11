@@ -1,0 +1,15 @@
+{
+  "name": "ajedrez",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ajedrez 1v1: server autoritativo (chess.js + WebSocket) que sirve el shell web con tablero Vexel",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix web install",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix web run build && npm --prefix server run start",
+    "serve": "npm --prefix server run start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "test": "npm --prefix server test"
+  }
+}

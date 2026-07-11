@@ -85,7 +85,7 @@ if (ENVIRONMENT_IS_NODE) {
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: C:\Users\soyal\AppData\Local\Temp\tmpfgvrylvb.js
+// include: C:\Users\soyal\AppData\Local\Temp\tmpaajumpuo.js
 if (!Module["expectedDataFileDownloads"]) Module["expectedDataFileDownloads"] = 0;
 
 Module["expectedDataFileDownloads"]++;
@@ -235,123 +235,131 @@ Module["expectedDataFileDownloads"]++;
       "start": 21134,
       "end": 25084
     }, {
-      "filename": "/textures/pieces/bB.png",
+      "filename": "/textures/highlight.png",
       "start": 25084,
-      "end": 29569
+      "end": 25293
+    }, {
+      "filename": "/textures/pieces/bB.png",
+      "start": 25293,
+      "end": 29778
     }, {
       "filename": "/textures/pieces/bB.svg",
-      "start": 29569,
-      "end": 29891
+      "start": 29778,
+      "end": 30100
     }, {
       "filename": "/textures/pieces/bK.png",
-      "start": 29891,
-      "end": 35670
+      "start": 30100,
+      "end": 35879
     }, {
       "filename": "/textures/pieces/bK.svg",
-      "start": 35670,
-      "end": 35992
+      "start": 35879,
+      "end": 36201
     }, {
       "filename": "/textures/pieces/bN.png",
-      "start": 35992,
-      "end": 42315
+      "start": 36201,
+      "end": 42524
     }, {
       "filename": "/textures/pieces/bN.svg",
-      "start": 42315,
-      "end": 42637
+      "start": 42524,
+      "end": 42846
     }, {
       "filename": "/textures/pieces/bP.png",
-      "start": 42637,
-      "end": 46887
+      "start": 42846,
+      "end": 47096
     }, {
       "filename": "/textures/pieces/bP.svg",
-      "start": 46887,
-      "end": 47209
+      "start": 47096,
+      "end": 47418
     }, {
       "filename": "/textures/pieces/bQ.png",
-      "start": 47209,
-      "end": 54555
+      "start": 47418,
+      "end": 54764
     }, {
       "filename": "/textures/pieces/bQ.svg",
-      "start": 54555,
-      "end": 54877
+      "start": 54764,
+      "end": 55086
     }, {
       "filename": "/textures/pieces/bR.png",
-      "start": 54877,
-      "end": 57498
+      "start": 55086,
+      "end": 57707
     }, {
       "filename": "/textures/pieces/bR.svg",
-      "start": 57498,
-      "end": 57820
+      "start": 57707,
+      "end": 58029
     }, {
       "filename": "/textures/pieces/wB.png",
-      "start": 57820,
-      "end": 62927
+      "start": 58029,
+      "end": 63136
     }, {
       "filename": "/textures/pieces/wB.svg",
-      "start": 62927,
-      "end": 63249
+      "start": 63136,
+      "end": 63458
     }, {
       "filename": "/textures/pieces/wK.png",
-      "start": 63249,
-      "end": 69992
+      "start": 63458,
+      "end": 70201
     }, {
       "filename": "/textures/pieces/wK.svg",
-      "start": 69992,
-      "end": 70314
+      "start": 70201,
+      "end": 70523
     }, {
       "filename": "/textures/pieces/wN.png",
-      "start": 70314,
-      "end": 77700
+      "start": 70523,
+      "end": 77909
     }, {
       "filename": "/textures/pieces/wN.svg",
-      "start": 77700,
-      "end": 78022
+      "start": 77909,
+      "end": 78231
     }, {
       "filename": "/textures/pieces/wP.png",
-      "start": 78022,
-      "end": 82874
+      "start": 78231,
+      "end": 83083
     }, {
       "filename": "/textures/pieces/wP.svg",
-      "start": 82874,
-      "end": 83196
+      "start": 83083,
+      "end": 83405
     }, {
       "filename": "/textures/pieces/wQ.png",
-      "start": 83196,
-      "end": 91582
+      "start": 83405,
+      "end": 91791
     }, {
       "filename": "/textures/pieces/wQ.svg",
-      "start": 91582,
-      "end": 91904
+      "start": 91791,
+      "end": 92113
     }, {
       "filename": "/textures/pieces/wR.png",
-      "start": 91904,
-      "end": 94725
+      "start": 92113,
+      "end": 94934
     }, {
       "filename": "/textures/pieces/wR.svg",
-      "start": 94725,
-      "end": 95047
+      "start": 94934,
+      "end": 95256
+    }, {
+      "filename": "/textures/select.png",
+      "start": 95256,
+      "end": 95465
     } ],
-    "remote_package_size": 95047
+    "remote_package_size": 95465
   });
 })();
 
-// end include: C:\Users\soyal\AppData\Local\Temp\tmpfgvrylvb.js
-// include: C:\Users\soyal\AppData\Local\Temp\tmp6o9zdaat.js
+// end include: C:\Users\soyal\AppData\Local\Temp\tmpaajumpuo.js
+// include: C:\Users\soyal\AppData\Local\Temp\tmphpo_u2i6.js
 // All the pre-js content up to here must remain later on, we need to run
 // it.
 if ((typeof ENVIRONMENT_IS_WASM_WORKER != "undefined" && ENVIRONMENT_IS_WASM_WORKER) || (typeof ENVIRONMENT_IS_PTHREAD != "undefined" && ENVIRONMENT_IS_PTHREAD) || (typeof ENVIRONMENT_IS_AUDIO_WORKLET != "undefined" && ENVIRONMENT_IS_AUDIO_WORKLET)) Module["preRun"] = [];
 
 var necessaryPreJSTasks = Module["preRun"].slice();
 
-// end include: C:\Users\soyal\AppData\Local\Temp\tmp6o9zdaat.js
-// include: C:\Users\soyal\AppData\Local\Temp\tmp4xctylgw.js
+// end include: C:\Users\soyal\AppData\Local\Temp\tmphpo_u2i6.js
+// include: C:\Users\soyal\AppData\Local\Temp\tmpvjma8xlz.js
 if (!Module["preRun"]) throw "Module.preRun should exist because file support used it; did a pre-js delete it?";
 
 necessaryPreJSTasks.forEach(task => {
   if (Module["preRun"].indexOf(task) < 0) throw "All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?";
 });
 
-// end include: C:\Users\soyal\AppData\Local\Temp\tmp4xctylgw.js
+// end include: C:\Users\soyal\AppData\Local\Temp\tmpvjma8xlz.js
 var programArgs = [];
 
 var thisProgram = "./this.program";
@@ -9726,6 +9734,10 @@ var _applyFen = Module["_applyFen"] = makeInvalidEarlyAccess("_applyFen");
 
 var _setInteractive = Module["_setInteractive"] = makeInvalidEarlyAccess("_setInteractive");
 
+var _setOrientation = Module["_setOrientation"] = makeInvalidEarlyAccess("_setOrientation");
+
+var _highlight = Module["_highlight"] = makeInvalidEarlyAccess("_highlight");
+
 var _clickAt = Module["_clickAt"] = makeInvalidEarlyAccess("_clickAt");
 
 var _main = Module["_main"] = makeInvalidEarlyAccess("_main");
@@ -9843,6 +9855,8 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["free"] != "undefined", "missing Wasm export: free");
   assert(typeof wasmExports["applyFen"] != "undefined", "missing Wasm export: applyFen");
   assert(typeof wasmExports["setInteractive"] != "undefined", "missing Wasm export: setInteractive");
+  assert(typeof wasmExports["setOrientation"] != "undefined", "missing Wasm export: setOrientation");
+  assert(typeof wasmExports["highlight"] != "undefined", "missing Wasm export: highlight");
   assert(typeof wasmExports["clickAt"] != "undefined", "missing Wasm export: clickAt");
   assert(typeof wasmExports["main"] != "undefined", "missing Wasm export: main");
   assert(typeof wasmExports["emwgpuCreateBindGroup"] != "undefined", "missing Wasm export: emwgpuCreateBindGroup");
@@ -9903,6 +9917,8 @@ function assignWasmExports(wasmExports) {
   _free = createExportWrapper("free", 1);
   _applyFen = Module["_applyFen"] = createExportWrapper("applyFen", 1);
   _setInteractive = Module["_setInteractive"] = createExportWrapper("setInteractive", 1);
+  _setOrientation = Module["_setOrientation"] = createExportWrapper("setOrientation", 1);
+  _highlight = Module["_highlight"] = createExportWrapper("highlight", 1);
   _clickAt = Module["_clickAt"] = createExportWrapper("clickAt", 2);
   _main = Module["_main"] = createExportWrapper("main", 3);
   _emwgpuCreateBindGroup = createExportWrapper("emwgpuCreateBindGroup", 1);

@@ -1,10 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { config } from "./config.js";
 import { ChessMatch } from "./chessMatch.js";
-import type { BetInfo } from "./lunaNegra.js";
 import type { Npub } from "./types.js";
 
-export type RoomPhase = "lobby" | "awaiting_deposit" | "playing" | "finished";
+export type RoomPhase = "lobby" | "playing" | "finished";
 
 export interface RoomPlayer {
   npub: Npub;
@@ -12,16 +11,13 @@ export interface RoomPlayer {
   color: "w" | "b" | null;
 }
 
-/** Una sala = un emparejamiento 1v1 con (opcional) apuesta en sats. */
+/** Una sala = un emparejamiento 1v1 de ajedrez. */
 export class Room {
   readonly id: string;
   readonly code: string;
   readonly hostNpub: Npub;
-  readonly createdAt = Date.now();
 
   phase: RoomPhase = "lobby";
-  stakeSats = 0;
-  bet: BetInfo | null = null;
   match: ChessMatch | null = null;
 
   /** Asiento por color. Host = blancas por defecto. */
@@ -91,10 +87,6 @@ export class Room {
     this.drawOfferBy = null;
     return this.match;
   }
-
-  inviteUrl(publicWebUrl: string): string {
-    return `${publicWebUrl.replace(/\/$/, "")}/?join=${encodeURIComponent(this.id)}`;
-  }
 }
 
 export class RoomManager {
@@ -115,13 +107,6 @@ export class RoomManager {
   getByCode(code: string): Room | undefined {
     const id = this.byCode.get(code.toUpperCase());
     return id ? this.byId.get(id) : undefined;
-  }
-
-  remove(roomId: string): void {
-    const room = this.byId.get(roomId);
-    if (!room) return;
-    this.byCode.delete(room.code);
-    this.byId.delete(roomId);
   }
 
   all(): Room[] {

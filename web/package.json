@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shell web (chess.com-inspired) para el ajedrez con apuestas en sats sobre Luna Negra",
+  "description": "Shell web (chess.com-inspired) para el ajedrez 1v1",
   "scripts": {
     "sync-assets": "node scripts/sync-assets.mjs",
     "sync-game": "node scripts/sync-game.mjs",

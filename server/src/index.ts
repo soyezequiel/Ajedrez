@@ -1,15 +1,15 @@
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { config } from "./config.js";
-import { luna, type SessionIdentity } from "./lunaNegra.js";
 import { MatchError } from "./chessMatch.js";
 import { Room, RoomError, RoomManager } from "./rooms.js";
-import type { ClientMessage, RoomView, ServerMessage } from "./protocol.js";
+import type { ClientMessage, RoomView, ServerMessage, SessionIdentity } from "./protocol.js";
 import type { MovePayload, Npub } from "./types.js";
-
-const PUBLIC_WEB_URL = process.env.PUBLIC_WEB_URL ?? "http://localhost:5173";
 
 const rooms = new RoomManager();
 
@@ -21,31 +21,39 @@ const conns = new Map<WebSocket, ConnState>();
 const roomSockets = new Map<string, Set<WebSocket>>();
 /** Jugadores que confirmaron "listo" por sala. */
 const readyByRoom = new Map<string, Set<Npub>>();
-/** Heartbeats de presencia por sala (para limpiar al terminar). */
-const presenceTimers = new Map<string, NodeJS.Timeout>();
+/** Timer por sala que cierra la partida cuando vence el reloj del turno. */
+const clockTimers = new Map<string, NodeJS.Timeout>();
+/** Timers de abandono por sala: npub desconectado → pierde si no vuelve a tiempo. */
+const abandonTimers = new Map<string, Map<Npub, NodeJS.Timeout>>();
 
-// ---------------------------------------------------------------- HTTP / webhook
+// ---------------------------------------------------------------- HTTP
 
 const app = express();
 app.use(cors());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, lunaLive: config.lunaLive, rooms: rooms.all().length });
+  res.json({ ok: true, rooms: rooms.all().length });
 });
 
-// Webhook de Luna Negra (§8): cuerpo CRUDO para verificar la firma HMAC.
-app.post(
-  "/webhook",
-  express.raw({ type: "*/*" }),
-  (req, res) => {
-    const raw = req.body.toString("utf8");
-    const sig = req.header("X-LunaNegra-Signature") ?? "";
-    if (!luna.verifyWebhook(raw, sig)) return res.status(401).end();
-    const event = JSON.parse(raw) as { type: string; data: unknown };
-    handleWebhook(event.type, event.data);
-    res.json({ ok: true });
-  },
-);
+// Sirve el build del web (deploy unificado: HTTP + WS en el mismo puerto). En dev
+// se corre Vite aparte (:5173) y este bloque simplemente no encuentra `web/dist`.
+const webDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "dist");
+if (existsSync(webDist)) {
+  app.use((_req, res, next) => {
+    // Cross-origin isolation: el tablero Vexel usa SharedArrayBuffer (-pthread).
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+    next();
+  });
+  app.use(express.static(webDist));
+  // Cualquier ruta no-archivo sirve el index (el shell rutea por query string).
+  app.get("*", (_req, res) => res.sendFile(join(webDist, "index.html")));
+} else {
+  console.warn(
+    "[ajedrez] web/dist no existe — buildeá el web ('npm --prefix web run build') " +
+      "o corré Vite en dev ('npm --prefix web run dev').",
+  );
+}
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -73,49 +81,50 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
   const state = conns.get(ws);
   if (!state) return;
 
-  if (msg.t === "auth") return void (await handleAuth(ws, state, msg.token));
+  if (msg.t === "auth") return handleAuth(ws, state, msg.token);
   if (!state.identity)
     return send(ws, { t: "error", code: "UNAUTHED", message: "Autenticate primero" });
 
   switch (msg.t) {
     case "create_room":
-      return handleCreate(ws, state, msg.stakeSats ?? 0);
+      return handleCreate(ws, state);
     case "join_room":
       return handleJoin(ws, state, msg.roomId, msg.code);
-    case "set_stake":
-      return handleSetStake(ws, state, msg.stakeSats);
     case "ready":
-      return await handleReady(ws, state);
+      return handleReady(ws, state);
     case "move":
       return handleMove(ws, state, msg.move);
     case "resign":
-      return await handleResign(ws, state);
+      return handleResign(ws, state);
     case "offer_draw":
       return handleOfferDraw(ws, state);
     case "accept_draw":
-      return await handleAcceptDraw(ws, state);
-    case "invite_friend":
-      return await handleInvite(ws, state, msg.toNpub);
+      return handleAcceptDraw(ws, state);
     case "leave":
       return handleDisconnect(ws);
   }
 }
 
-async function handleAuth(ws: WebSocket, state: ConnState, token: string): Promise<void> {
-  const identity = await luna.verifySession(token);
+/** Login local por nombre: derivamos un id estable del nombre elegido. */
+function handleAuth(ws: WebSocket, state: ConnState, token: string): void {
+  const identity = makeIdentity(token);
   if (!identity)
-    return send(ws, { t: "error", code: "INVALID_TOKEN", message: "Token inválido" });
+    return send(ws, { t: "error", code: "INVALID_TOKEN", message: "Nombre inválido" });
   state.identity = identity;
   send(ws, { t: "authed", identity });
-  // De paso mandamos los amigos para la barra lateral.
-  const friends = await luna.getFriends(identity.npub);
-  send(ws, { t: "friends", friends });
 }
 
-function handleCreate(ws: WebSocket, state: ConnState, stakeSats: number): void {
+/** `token` = nombre del jugador. Id estable por nombre (para reconexión). */
+function makeIdentity(token: string): SessionIdentity | null {
+  const name = token.trim();
+  if (!name) return null;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]/g, "") || "anon";
+  return { npub: `u_${slug}`, displayName: name };
+}
+
+function handleCreate(ws: WebSocket, state: ConnState): void {
   const me = identity(state);
   const room = rooms.create({ npub: me.npub, displayName: me.displayName });
-  room.stakeSats = Math.max(0, Math.floor(stakeSats));
   attachToRoom(ws, state, room);
   broadcastRoom(room);
 }
@@ -133,19 +142,28 @@ function handleJoin(
     room.join({ npub: me.npub, displayName: me.displayName });
   attachToRoom(ws, state, room);
   broadcastRoom(room);
+  resync(ws, room);
 }
 
-function handleSetStake(ws: WebSocket, state: ConnState, stakeSats: number): void {
-  const room = currentRoom(state);
-  if (room.hostNpub !== identity(state).npub)
-    return send(ws, { t: "error", code: "NOT_HOST", message: "Solo el host fija la apuesta" });
-  if (room.phase !== "lobby")
-    return send(ws, { t: "error", code: "BAD_PHASE", message: "La partida ya arrancó" });
-  room.stakeSats = Math.max(0, Math.floor(stakeSats));
-  broadcastRoom(room);
+/** Pone al día a un socket que (re)entra a una sala con partida en curso o terminada. */
+function resync(ws: WebSocket, room: Room): void {
+  const match = room.match;
+  if (!match) return;
+  // Cobrar el reloj primero: si venció mientras nadie miraba, cerrar acá mismo.
+  const timedOut = match.checkTimeout();
+  if (timedOut) {
+    broadcast(room, { t: "match", snapshot: timedOut });
+    finishMatch(room);
+    return;
+  }
+  send(ws, { t: "match", snapshot: match.snapshot() });
+  if (room.drawOfferBy && !match.isOver)
+    send(ws, { t: "draw_offer", byNpub: room.drawOfferBy });
+  if (match.isOver)
+    send(ws, { t: "ended", result: match.getResult(), winnerNpubs: match.winnerNpubs() });
 }
 
-async function handleReady(ws: WebSocket, state: ConnState): Promise<void> {
+function handleReady(ws: WebSocket, state: ConnState): void {
   const room = currentRoom(state);
   const me = identity(state);
   if (!room.isFull)
@@ -153,57 +171,29 @@ async function handleReady(ws: WebSocket, state: ConnState): Promise<void> {
   const ready = readyByRoom.get(room.id) ?? new Set<Npub>();
   ready.add(me.npub);
   readyByRoom.set(room.id, ready);
-  if (room.roster.every((p) => ready.has(p.npub))) await beginMatchFlow(room);
-}
-
-/** Ambos listos: si hay apuesta, crear el pozo y esperar depósitos; si no, arrancar. */
-async function beginMatchFlow(room: Room): Promise<void> {
-  if (room.stakeSats > 0 && !room.bet) {
-    const white = room.white!;
-    const black = room.black!;
-    const bet = await luna.createBet({
-      participants: [white.npub, black.npub],
-      stakeSats: room.stakeSats,
-      roomId: room.id,
-      matchId: `match_${room.id}`,
-      victoryCondition: "jaque mate / abandono / tiempo",
-    });
-    room.bet = bet;
-    room.phase = "awaiting_deposit";
-    broadcastRoom(room);
-    broadcast(room, { t: "bet", bet });
-    if (bet?.status === "funded") return startAndBroadcast(room);
-    return pollDeposits(room);
-  }
-  startAndBroadcast(room);
-}
-
-/** Pollea el estado del pozo hasta que esté fondeado o venza el plazo. */
-function pollDeposits(room: Room): void {
-  if (!room.bet) return;
-  const betId = room.bet.betId;
-  const timer = setInterval(async () => {
-    const bet = await luna.getBet(betId);
-    if (!bet) return;
-    room.bet = bet;
-    broadcast(room, { t: "bet", bet });
-    if (bet.status === "funded") {
-      clearInterval(timer);
-      startAndBroadcast(room);
-    } else if (["expired", "cancelled", "refunded"].includes(bet.status)) {
-      clearInterval(timer);
-      room.phase = "lobby";
-      readyByRoom.delete(room.id);
-      broadcastRoom(room);
-    }
-  }, 3000);
+  if (room.roster.every((p) => ready.has(p.npub))) startAndBroadcast(room);
 }
 
 function startAndBroadcast(room: Room): void {
   const match = room.startMatch();
   broadcastRoom(room);
   broadcast(room, { t: "match", snapshot: match.snapshot() });
-  startPresence(room);
+  scheduleClock(room);
+}
+
+/** Programa el cierre por timeout para cuando venza el reloj del jugador en turno. */
+function scheduleClock(room: Room): void {
+  clearTimeout(clockTimers.get(room.id));
+  clockTimers.delete(room.id);
+  const match = room.match;
+  if (!match || match.isOver) return;
+  const timer = setTimeout(() => {
+    const snapshot = match.checkTimeout();
+    if (!snapshot) return scheduleClock(room); // jitter: aún queda tiempo
+    broadcast(room, { t: "match", snapshot });
+    finishMatch(room);
+  }, match.turnRemainingMs() + 50);
+  clockTimers.set(room.id, timer);
 }
 
 function handleMove(ws: WebSocket, state: ConnState, move: MovePayload): void {
@@ -211,15 +201,16 @@ function handleMove(ws: WebSocket, state: ConnState, move: MovePayload): void {
   if (!room.match) return send(ws, { t: "error", code: "NO_MATCH", message: "No hay partida" });
   const snapshot = room.match.move(identity(state).npub, move);
   broadcast(room, { t: "match", snapshot });
-  if (room.match.isOver) void finishMatch(room);
+  if (room.match.isOver) finishMatch(room);
+  else scheduleClock(room);
 }
 
-async function handleResign(ws: WebSocket, state: ConnState): Promise<void> {
+function handleResign(ws: WebSocket, state: ConnState): void {
   const room = currentRoom(state);
   if (!room.match) return;
   const snapshot = room.match.resign(identity(state).npub);
   broadcast(room, { t: "match", snapshot });
-  await finishMatch(room);
+  finishMatch(room);
 }
 
 function handleOfferDraw(ws: WebSocket, state: ConnState): void {
@@ -229,87 +220,29 @@ function handleOfferDraw(ws: WebSocket, state: ConnState): void {
   broadcast(room, { t: "draw_offer", byNpub: room.drawOfferBy });
 }
 
-async function handleAcceptDraw(ws: WebSocket, state: ConnState): Promise<void> {
+function handleAcceptDraw(ws: WebSocket, state: ConnState): void {
   const room = currentRoom(state);
   const me = identity(state).npub;
   if (!room.match || !room.drawOfferBy || room.drawOfferBy === me) return;
   const snapshot = room.match.agreeDraw();
   broadcast(room, { t: "match", snapshot });
-  await finishMatch(room);
+  finishMatch(room);
 }
 
-async function handleInvite(ws: WebSocket, state: ConnState, toNpub: Npub): Promise<void> {
-  const room = currentRoom(state);
-  const me = identity(state);
-  const res = await luna.sendInvite({
-    fromNpub: me.npub,
-    toNpub,
-    roomId: room.id,
-    inviteUrl: room.inviteUrl(PUBLIC_WEB_URL),
-  });
-  if (!res.delivered)
-    send(ws, { t: "error", code: "INVITE_FAILED", message: "No se pudo invitar" });
-}
-
-/** Cierre de partida: declarar ganador a Luna Negra y avisar a la sala. */
-async function finishMatch(room: Room): Promise<void> {
+/** Cierre de partida: cancelar timers y avisar el resultado a la sala. */
+function finishMatch(room: Room): void {
   if (!room.match) return;
   room.phase = "finished";
-  stopPresence(room);
-  const winnerNpubs = room.match.winnerNpubs();
-  const betId = room.bet?.betId ?? null;
-  if (betId) await luna.reportWinners(betId, winnerNpubs);
+  clearTimeout(clockTimers.get(room.id));
+  clockTimers.delete(room.id);
+  const timers = abandonTimers.get(room.id);
+  if (timers) for (const t of timers.values()) clearTimeout(t);
+  abandonTimers.delete(room.id);
   broadcast(room, {
     t: "ended",
     result: room.match.getResult(),
-    winnerNpubs,
-    betId,
+    winnerNpubs: room.match.winnerNpubs(),
   });
-}
-
-// ----------------------------------------------------------------- presencia (§3)
-
-function startPresence(room: Room): void {
-  const beat = () => {
-    for (const p of room.roster) {
-      void luna.postPresence({
-        npub: p.npub,
-        status: "in-game",
-        roomId: room.id,
-        state: { rival: room.roster.find((o) => o.npub !== p.npub)?.displayName },
-      });
-    }
-  };
-  beat();
-  presenceTimers.set(room.id, setInterval(beat, 10_000));
-}
-
-function stopPresence(room: Room): void {
-  const timer = presenceTimers.get(room.id);
-  if (timer) clearInterval(timer);
-  presenceTimers.delete(room.id);
-  for (const p of room.roster) void luna.postPresence({ npub: p.npub, status: "online" });
-}
-
-// ----------------------------------------------------------------- webhooks (§8)
-
-function handleWebhook(type: string, data: unknown): void {
-  // Reflejar el evento a la sala correspondiente si aplica.
-  const roomId = (data as { roomId?: string })?.roomId;
-  if (roomId) {
-    const room = rooms.get(roomId);
-    if (room) void refreshBet(room);
-  }
-  console.log(`[webhook] ${type}`);
-}
-
-async function refreshBet(room: Room): Promise<void> {
-  if (!room.bet) return;
-  const bet = await luna.getBet(room.bet.betId);
-  if (bet) {
-    room.bet = bet;
-    broadcast(room, { t: "bet", bet });
-  }
 }
 
 // ----------------------------------------------------------------- helpers
@@ -319,16 +252,60 @@ function attachToRoom(ws: WebSocket, state: ConnState, room: Room): void {
   const set = roomSockets.get(room.id) ?? new Set<WebSocket>();
   set.add(ws);
   roomSockets.set(room.id, set);
+  // Si tenía un timer de abandono corriendo, volvió a tiempo.
+  const timers = abandonTimers.get(room.id);
+  const me = state.identity;
+  const pending = me ? timers?.get(me.npub) : undefined;
+  if (me && pending) {
+    clearTimeout(pending);
+    timers?.delete(me.npub);
+    broadcast(room, { t: "presence", npub: me.npub, online: true });
+  }
 }
 
 function handleDisconnect(ws: WebSocket): void {
   const state = conns.get(ws);
   conns.delete(ws);
   if (!state?.roomId) return;
-  const set = roomSockets.get(state.roomId);
-  set?.delete(ws);
-  // Si una partida con apuesta queda sin un jugador conectado, no resolvemos
-  // automáticamente acá (un abandono lo maneja un timeout futuro / reconexión).
+  roomSockets.get(state.roomId)?.delete(ws);
+  const room = rooms.get(state.roomId);
+  const me = state.identity;
+  if (!room || !me) return;
+  if (isOnline(room.id, me.npub)) return; // le queda otra pestaña/socket
+  // Con partida en curso: gracia para reconectarse; si no vuelve, pierde.
+  if (room.phase === "playing" && room.match && !room.match.isOver) {
+    broadcast(room, {
+      t: "presence",
+      npub: me.npub,
+      online: false,
+      graceMs: config.abandonGraceMs,
+    });
+    startAbandonTimer(room, me.npub);
+  }
+}
+
+/** ¿Hay algún socket vivo de este jugador en la sala? */
+function isOnline(roomId: string, npub: Npub): boolean {
+  const set = roomSockets.get(roomId);
+  if (!set) return false;
+  for (const ws of set) if (conns.get(ws)?.identity?.npub === npub) return true;
+  return false;
+}
+
+function startAbandonTimer(room: Room, npub: Npub): void {
+  const timers = abandonTimers.get(room.id) ?? new Map<Npub, NodeJS.Timeout>();
+  abandonTimers.set(room.id, timers);
+  clearTimeout(timers.get(npub));
+  timers.set(
+    npub,
+    setTimeout(() => {
+      timers.delete(npub);
+      if (!room.match || room.match.isOver || isOnline(room.id, npub)) return;
+      const snapshot = room.match.resign(npub);
+      broadcast(room, { t: "match", snapshot });
+      finishMatch(room);
+    }, config.abandonGraceMs),
+  );
 }
 
 function roomView(room: Room): RoomView {
@@ -337,9 +314,7 @@ function roomView(room: Room): RoomView {
     code: room.code,
     hostNpub: room.hostNpub,
     phase: room.phase,
-    stakeSats: room.stakeSats,
     players: room.roster,
-    inviteUrl: room.inviteUrl(PUBLIC_WEB_URL),
   };
 }
 
@@ -370,7 +345,6 @@ function currentRoom(state: ConnState): Room {
 }
 
 server.listen(config.port, () => {
-  console.log(
-    `[ajedrez] server en :${config.port} · Luna Negra ${config.lunaLive ? "LIVE" : "MOCK"}`,
-  );
+  const served = existsSync(webDist) ? " · sirviendo web/dist" : "";
+  console.log(`[ajedrez] http://localhost:${config.port}${served}`);
 });

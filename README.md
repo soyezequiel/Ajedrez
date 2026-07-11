@@ -1,17 +1,17 @@
-# Ajedrez online (sats sobre Luna Negra · motor Vexel)
+# Ajedrez online (motor Vexel)
 
 
-Ajedrez 1v1 inspirado en chess.com donde **el ganador se lleva los sats
-apostados**, con **Luna Negra** integrada (identidad, escrow, amigos, presencia,
-invitaciones, top) y el tablero renderizado con el motor **Vexel**.
+Ajedrez 1v1 inspirado en chess.com: el servidor es la autoridad (valida jugadas,
+lleva el reloj, declara al ganador) y el tablero se renderiza con el motor
+**Vexel**.
 
 
 ## Piezas del repo
 
 | Carpeta | Qué es | Estado |
 |---|---|---|
-| `server/` | Servidor autoritativo (chess.js + WebSocket) + integración Luna Negra | OK — funcionando (mock), 10 tests |
-| `web/` | Shell TS estilo chess.com (login, lobby, apuesta, top) | OK — tablero interino canvas, verificado e2e |
+| `server/` | Servidor autoritativo (chess.js + WebSocket) | OK — funcionando, 10 tests |
+| `web/` | Shell TS estilo chess.com (login por nombre, lobby, partida) | OK — tablero interino canvas, verificado e2e |
 | `game/` | Cliente Vexel: tablero 2D (sprites) + interop web | scaffold + assets; falta compilar (nim/emscripten) |
 | `docs/` | Plan de integración Vexel y specs | — |
 
@@ -19,34 +19,49 @@ invitaciones, top) y el tablero renderizado con el motor **Vexel**.
 ## Arquitectura
 
 ```
-  Luna Negra (desplegado)         server/  (autoridad)              web/ (+ game/ Vexel)
-  identidad · escrow sats   <-->  reglas chess.js · salas · WS  <--> shell TS + tablero
-  amigos · presencia · top        guarda ln_sk_ · reporta ganador    (canvas hoy, Vexel luego)
+  server/  (autoridad)              web/ (+ game/ Vexel)
+  reglas chess.js · salas · WS  <--> shell TS + tablero
+  sirve web/dist + WebSocket         (canvas hoy, Vexel luego)
+  en el mismo puerto
 ```
 
-El **dinero siempre lo decide el servidor** (regla de oro de Luna Negra): el
-cliente solo renderiza y propone jugadas. Ver `docs/vexel-integration.md`,
-`server/README.md` y `web/README.md`.
+El **resultado siempre lo decide el servidor**: el cliente solo renderiza y
+propone jugadas. En el deploy, el `server/` **sirve también el build del `web/`**
+(HTTP + WebSocket en el mismo puerto), así que corre como **un solo proceso**. Ver
+`docs/vexel-integration.md`, `server/README.md` y `web/README.md`.
 
 
-## Correr (modo dev, sin credenciales)
+## Correr
+
+Primera vez, instalar dependencias de ambos:
 
 ```bash
-# servidor (autoridad)
-cd server && npm install && PORT=8787 npm run dev
-
-# shell web (otra terminal)
-cd web && npm install && npm run dev   # http://localhost:5173/?lnDemo=Ana
+npm run install:all
 ```
 
-Verificado end-to-end: SSO mock → crear sala con apuesta → 2 jugadores →
-partida relayada por el servidor → resultado y banner de ganador.
+**Jugar (deploy unificado, un solo proceso):**
+
+```bash
+npm start        # buildea el web y levanta el server en http://localhost:8787
+```
+
+Abrí **http://localhost:8787**: entrás con un nombre, "Crear sala" y le pasás el
+link o el código al rival. En una red local, otros pueden entrar desde
+`http://TU-IP-LOCAL:8787` (el link de invitación usa esa IP automáticamente).
+`npm run serve` levanta el server sin rebuildear el web (si ya lo buildeaste).
+
+**Desarrollar (dos procesos, con hot-reload del web):**
+
+```bash
+npm run dev:server     # autoridad en :8787
+npm run dev:web        # shell Vite en :5173 (otra terminal)
+```
+
+Verificado end-to-end: login por nombre → crear sala → 2 jugadores → partida
+relayada por el servidor → resultado y banner de ganador.
 
 
 ## Prerequisitos pendientes
 
 - **Instalar `nim` + `emscripten` + `ritual`** para compilar el cliente Vexel (M1)
   y reemplazar el tablero canvas por el de Vexel (mismo contrato `window.__chess`).
-- **Provisionar Luna Negra** (M0): crear el juego en `/provider`, obtener `gameId`
-  + API key `ln_sk_` + webhook secret y ponerlos en `server/.env` (sin esto corre
-  en modo mock: identidad `lndemo:`, depósitos instantáneos).

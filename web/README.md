@@ -1,10 +1,8 @@
 # Shell web (chess.com-inspired)
 
 
-Interfaz del ajedrez: login SSO de Luna Negra (§1), salas con código/link,
-barra de amigos, panel de apuesta, reloj y resultado. Habla con el **servidor**
-por WebSocket (autoridad de reglas) y se conecta a **Luna Negra** para identidad
-y top.
+Interfaz del ajedrez: login local por nombre, salas con código/link, reloj y
+resultado. Habla con el **servidor** por WebSocket (autoridad de reglas).
 
 El tablero por defecto es el de **Vexel** (WASM/WebGPU): `VexelBoard` carga
 `game/bin/ajedrez.js` en la misma página (no iframe — el iframe deadlockea
@@ -28,12 +26,7 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Modo dev sin Luna Negra: entrá con un nombre, o abrí
-`http://localhost:5173/?lnDemo=Ana`. En producción Luna Negra abre el juego con
-`?lnToken=`. Para unirse a una sala: `?join=<roomId>` o el código en la home.
-
-Verificado end-to-end (mock): SSO → crear sala con apuesta → 2 jugadores →
-partida relayada por el server → resultado y banner de ganador.
+Entrá con un nombre. Para unirse a una sala: `?join=<roomId>` o el código en la home.
 
 
 ## Estructura
@@ -48,4 +41,3 @@ partida relayada por el server → resultado y banner de ganador.
 ## Variables (`.env`)
 
 - `VITE_WS_URL` — WebSocket del servidor (default `ws://localhost:8787`).
-- `VITE_LUNA_URL` — base de Luna Negra (para el top).

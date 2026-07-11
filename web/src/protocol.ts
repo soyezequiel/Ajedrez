@@ -11,8 +11,8 @@ export interface MovePayload {
 
 export type MatchResult =
   | { kind: "ongoing" }
-  | { kind: "white_win"; by: "checkmate" | "resign" | "timeout" | "abandon" }
-  | { kind: "black_win"; by: "checkmate" | "resign" | "timeout" | "abandon" }
+  | { kind: "white_win"; by: "checkmate" | "resign" | "timeout" }
+  | { kind: "black_win"; by: "checkmate" | "resign" | "timeout" }
   | { kind: "draw"; by: "stalemate" | "insufficient" | "threefold" | "fifty" | "agreement" };
 
 export interface MatchSnapshot {
@@ -30,40 +30,10 @@ export interface MatchSnapshot {
 
 export interface SessionIdentity {
   npub: string;
-  pubkey: string;
   displayName: string;
-  avatarUrl: string | null;
-  gameId: string;
-  source: "luna-negra" | "mock";
 }
 
-export interface Friend {
-  npub: string;
-  displayName: string;
-  avatarUrl: string | null;
-  presence: "in-game" | "online" | "offline";
-  roomId: string | null;
-  lastSeenMs: number | null;
-}
-
-export interface BetInfo {
-  betId: string;
-  status: "pending_deposits" | "funded" | "settled" | "cancelled" | "expired" | "refunded";
-  potTargetSats: number;
-  feeSats: number;
-  netPayoutSats: number;
-  depositDeadline: string | null;
-  participants: Array<{
-    npub: string;
-    depositStatus: "pending" | "paid";
-    payoutSats: number | null;
-    bolt11: string | null;
-    lnurl: string | null;
-    payUrl: string | null;
-  }>;
-}
-
-export type RoomPhase = "lobby" | "awaiting_deposit" | "playing" | "finished";
+export type RoomPhase = "lobby" | "playing" | "finished";
 
 export interface RoomPlayer {
   npub: string;
@@ -76,22 +46,18 @@ export interface RoomView {
   code: string;
   hostNpub: string;
   phase: RoomPhase;
-  stakeSats: number;
   players: RoomPlayer[];
-  inviteUrl: string;
 }
 
 export type ClientMessage =
-  | { t: "auth"; token: string; inviteToken?: string }
-  | { t: "create_room"; stakeSats?: number }
+  | { t: "auth"; token: string }
+  | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
-  | { t: "set_stake"; stakeSats: number }
   | { t: "ready" }
   | { t: "move"; move: MovePayload }
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
-  | { t: "invite_friend"; toNpub: string }
   | { t: "leave" };
 
 export type ServerMessage =
@@ -99,7 +65,7 @@ export type ServerMessage =
   | { t: "error"; code: string; message: string }
   | { t: "room"; room: RoomView }
   | { t: "match"; snapshot: MatchSnapshot }
-  | { t: "bet"; bet: BetInfo | null }
-  | { t: "friends"; friends: Friend[] }
   | { t: "draw_offer"; byNpub: string }
-  | { t: "ended"; result: MatchResult; winnerNpubs: string[]; betId: string | null };
+  | { t: "ended"; result: MatchResult; winnerNpubs: string[] }
+  /** Un jugador se desconectó (online=false, con gracia para volver) o volvió. */
+  | { t: "presence"; npub: string; online: boolean; graceMs?: number };

@@ -67,7 +67,7 @@ con el FEN nuevo.
 
 ## Interop JS ↔ WASM (web)
 
-El shell web (TS, M2) maneja login/lobby/amigos/apuesta/top en DOM y la conexión
+El shell web (TS, M2) maneja login/lobby en DOM y la conexión
 WebSocket al server. El canvas Vexel solo dibuja el tablero y emite intentos de
 jugada. Contrato mínimo:
 

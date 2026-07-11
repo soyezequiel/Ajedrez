@@ -177,6 +177,12 @@ function squareToIndex(square: string): number {
 
 const GAME_BASE = (import.meta.env.VITE_GAME_BASE as string | undefined) ?? "/game";
 
+// Geometría del juego, espejo de WinW/Board en game/src/ajedrez.nim: canvas
+// lógico de 600x600 con tablero de 560 centrado → casillas de 70 y margen 20.
+const GAME_SIZE = 600;
+const GAME_MARGIN = 20;
+const GAME_CELL = 70;
+
 declare global {
   interface Window {
     Module?: {
@@ -212,15 +218,40 @@ export class VexelBoard implements BoardController {
     canvas.height = 600;
     canvas.tabIndex = 0;
     canvas.style.cssText =
-      "width:100%;aspect-ratio:1;display:block;border-radius:var(--radius,10px);outline:none;";
+      "width:100%;aspect-ratio:1;display:block;border-radius:var(--radius,10px);outline:none;touch-action:none;";
     container.appendChild(canvas);
     this.canvas = canvas;
 
-    canvas.addEventListener("click", (e) => {
+    // Input por pointer events (mouse, táctil y lápiz) con soporte de ARRASTRE:
+    // bajar en una casilla selecciona (clickAt); soltar en OTRA casilla es un
+    // drag → segundo clickAt que intenta la jugada. Soltar en la misma casilla
+    // no re-manda nada (sería deselección) y queda el flujo clic-clic.
+    const toGame = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
-      const x = (e.clientX - r.left) * (canvas.width / r.width);
-      const y = (e.clientY - r.top) * (canvas.height / r.height);
-      this.call("clickAt", ["number", "number"], [x, y]);
+      return {
+        x: ((e.clientX - r.left) * GAME_SIZE) / r.width,
+        y: ((e.clientY - r.top) * GAME_SIZE) / r.height,
+      };
+    };
+    const squareOf = (p: { x: number; y: number }) => {
+      const file = Math.floor((p.x - GAME_MARGIN) / GAME_CELL);
+      const rank = Math.floor((p.y - GAME_MARGIN) / GAME_CELL);
+      return file >= 0 && file < 8 && rank >= 0 && rank < 8 ? rank * 8 + file : -1;
+    };
+    let downSquare = -1;
+    canvas.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const p = toGame(e);
+      downSquare = squareOf(p);
+      this.call("clickAt", ["number", "number"], [p.x, p.y]);
+    });
+    canvas.addEventListener("pointerup", (e) => {
+      if (downSquare < 0) return;
+      const p = toGame(e);
+      const up = squareOf(p);
+      if (up >= 0 && up !== downSquare)
+        this.call("clickAt", ["number", "number"], [p.x, p.y]);
+      downSquare = -1;
     });
 
     window.__chess = { onMove: (f, t, p) => this.onMove(f, t, p) };
@@ -254,9 +285,12 @@ export class VexelBoard implements BoardController {
   setInteractive(on: boolean): void {
     this.call("setInteractive", ["number"], [on ? 1 : 0]);
   }
-  // Vexel aún dibuja siempre con blancas abajo; orientación/resalte quedan pendientes.
-  setOrientation(_color: Color): void {}
-  highlight(_squares: string[]): void {}
+  setOrientation(color: Color): void {
+    this.call("setOrientation", ["number"], [color === "b" ? 1 : 0]);
+  }
+  highlight(squares: string[]): void {
+    this.call("highlight", ["string"], [squares.join(" ")]);
+  }
   destroy(): void {
     this.script.remove();
     this.canvas.remove();

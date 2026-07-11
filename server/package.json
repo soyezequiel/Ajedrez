@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Servidor autoritativo de ajedrez con apuestas en sats sobre Luna Negra",
+  "description": "Servidor autoritativo de ajedrez 1v1 (chess.js + WebSocket)",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node --import tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:luna": "node scripts/verify-luna.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

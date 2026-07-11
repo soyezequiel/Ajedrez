@@ -24,7 +24,11 @@ export class Net {
       this.queue = [];
       this.handlers.open?.();
     });
-    ws.addEventListener("close", () => this.handlers.close?.());
+    ws.addEventListener("close", () => {
+      // Descartar intents encolados: tras reconectar hay que re-autenticar primero.
+      this.queue = [];
+      this.handlers.close?.();
+    });
     ws.addEventListener("message", (e) => {
       const msg = JSON.parse(e.data as string) as ServerMessage;
       const fn = this.handlers[msg.t] as ((m: ServerMessage) => void) | undefined;
@@ -38,10 +42,9 @@ export class Net {
   }
 
   // Atajos
-  auth(token: string, inviteToken?: string) { this.send({ t: "auth", token, inviteToken }); }
-  createRoom(stakeSats: number) { this.send({ t: "create_room", stakeSats }); }
+  auth(token: string) { this.send({ t: "auth", token }); }
+  createRoom() { this.send({ t: "create_room" }); }
   joinRoom(opts: { roomId?: string; code?: string }) { this.send({ t: "join_room", ...opts }); }
-  setStake(stakeSats: number) { this.send({ t: "set_stake", stakeSats }); }
   ready() { this.send({ t: "ready" }); }
   move(from: string, to: string, promotion?: "q" | "r" | "b" | "n") {
     this.send({ t: "move", move: { from, to, promotion } });
@@ -49,5 +52,4 @@ export class Net {
   resign() { this.send({ t: "resign" }); }
   offerDraw() { this.send({ t: "offer_draw" }); }
   acceptDraw() { this.send({ t: "accept_draw" }); }
-  inviteFriend(toNpub: string) { this.send({ t: "invite_friend", toNpub }); }
 }

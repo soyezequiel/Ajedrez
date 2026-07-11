@@ -1,4 +1,4 @@
-/** Identidad estable del jugador = npub de Nostr (nunca un UUID local). */
+/** Identidad del jugador: un id local estable derivado del nombre. */
 export type Npub = string;
 
 export type Color = "w" | "b";
@@ -6,8 +6,8 @@ export type Color = "w" | "b";
 /** Cómo terminó (o no) una partida. */
 export type MatchResult =
   | { kind: "ongoing" }
-  | { kind: "white_win"; by: "checkmate" | "resign" | "timeout" | "abandon" }
-  | { kind: "black_win"; by: "checkmate" | "resign" | "timeout" | "abandon" }
+  | { kind: "white_win"; by: "checkmate" | "resign" | "timeout" }
+  | { kind: "black_win"; by: "checkmate" | "resign" | "timeout" }
   | {
       kind: "draw";
       by: "stalemate" | "insufficient" | "threefold" | "fifty" | "agreement";
