@@ -73,7 +73,11 @@ export function toNgpSigner(s: ChessSigner): NgpSigner {
 
 const SIGNER_KEY = "ajedrez.signer.v1";
 
-export type StoredSigner =
+export type StoredSigner = {
+  /** Pubkey del usuario, cacheada tras el primer login. Permite restaurar sin el
+   *  RPC `get_public_key` (en NIP-46 viaja por relays: segundos de espera). */
+  pubkey?: string;
+} & (
   | { method: "nip07" }
   | { method: "local"; nsec: string }
   | {
@@ -85,7 +89,8 @@ export type StoredSigner =
         secret: string | null;
         encryption?: "nip44" | "nip04";
       };
-    };
+    }
+);
 
 function readStoredSigner(): StoredSigner | null {
   if (typeof window === "undefined") return null;
@@ -110,6 +115,13 @@ function writeStoredSigner(stored: StoredSigner | null): void {
 
 export function hasStoredSigner(): boolean {
   return readStoredSigner() !== null;
+}
+
+/** Cachea la pubkey del usuario en la sesión guardada (acelera el próximo restore). */
+export function updateStoredPubkey(pubkey: string): void {
+  const stored = readStoredSigner();
+  if (!stored || stored.pubkey === pubkey) return;
+  writeStoredSigner({ ...stored, pubkey });
 }
 
 // --- Signer activo (singleton en memoria) ---
@@ -148,7 +160,13 @@ export async function restoreSigner(): Promise<ChessSigner | null> {
       active = importNsec(stored.nsec);
     } else {
       const { restoreBunkerSigner } = await import("./signer-nip46.js");
-      active = await restoreBunkerSigner(stored.clientNsec, stored.bunker);
+      const signer = await restoreBunkerSigner(stored.clientNsec, stored.bunker);
+      // Con pubkey cacheada evitamos el RPC get_public_key por relays (lento); la
+      // primera firma real igual valida contra el firmante. Solo NIP-46: en NIP-07
+      // el usuario puede haber cambiado de cuenta en la extensión.
+      active = stored.pubkey
+        ? { ...signer, getPublicKey: async () => stored.pubkey! }
+        : signer;
     }
     return active;
   } catch {

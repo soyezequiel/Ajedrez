@@ -12,6 +12,7 @@ import {
   setActiveSigner,
   signAuthChallenge,
   toNgpSigner,
+  updateStoredPubkey,
   waitForNip07,
   type ChessSigner,
 } from "./nostr/signer-core.js";
@@ -140,23 +141,64 @@ function loginWith(name: string): void {
   net.auth(trimmed);
 }
 
+/** Caché del nombre de perfil por pubkey: el login no espera a los relays. Cachea
+ *  también el resultado negativo (name:null = "sé que no tiene perfil") para que
+ *  los logins repetidos de una clave sin kind:0 tampoco esperen. */
+const PROFILE_CACHE_KEY = "ajedrez.profile.v1";
+
+function readCachedProfile(pubkey: string): { known: boolean; name: string | null } {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return { known: false, name: null };
+    const parsed = JSON.parse(raw) as { pubkey?: string; name?: string | null };
+    if (parsed.pubkey !== pubkey) return { known: false, name: null };
+    return { known: true, name: parsed.name ?? null };
+  } catch {
+    return { known: false, name: null };
+  }
+}
+
+function writeCachedProfile(pubkey: string, name: string | null): void {
+  try {
+    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ pubkey, name }));
+  } catch {
+    /* storage bloqueado */
+  }
+}
+
+/** Fetch del perfil en curso (el challenge lo espera un ratito solo si no hay caché). */
+let profileFetch: Promise<unknown> | null = null;
+/** ¿Ya conocemos el perfil de esta pubkey (aunque sea "no tiene")? → no esperar. */
+let profileKnown = false;
+
 /**
  * Autentica con un ChessSigner ya obtenido (cualquier método: nip07/nip46/local).
- * Toma el nombre del perfil best-effort y arranca el handshake de challenge.
+ * Conecta al server DE INMEDIATO; el nombre de perfil se resuelve en paralelo
+ * (caché primero, relays de fondo) para no demorar el login.
  */
 async function beginNostr(signer: ChessSigner): Promise<void> {
   renderConnecting();
-  let displayName = "";
+  let pubkey: string;
   try {
-    const pubkey = await signer.getPublicKey();
-    displayName = (await fetchProfile(pubkey)).name ?? "";
+    pubkey = await signer.getPublicKey();
   } catch {
     clearActiveSigner();
     login = null;
     toast("No se pudo obtener tu clave Nostr.");
     return renderLogin();
   }
-  login = { kind: "nostr", signer: toNgpSigner(signer), displayName };
+  updateStoredPubkey(pubkey);
+  const cached = readCachedProfile(pubkey);
+  profileKnown = cached.known;
+  login = { kind: "nostr", signer: toNgpSigner(signer), displayName: cached.name ?? "" };
+  // Perfil en paralelo: refresca la caché (positiva o negativa) y el nombre si
+  // todavía no se mandó al server.
+  profileFetch = fetchProfile(pubkey)
+    .then((p) => {
+      writeCachedProfile(pubkey, p.name);
+      if (p.name && login?.kind === "nostr" && !login.displayName) login.displayName = p.name;
+    })
+    .catch(() => {});
   net.connect();
   net.authChallenge();
 }
@@ -298,6 +340,11 @@ function wireNet(): void {
   });
   net.on("challenge", async (m) => {
     if (login?.kind !== "nostr") return;
+    // Perfil desconocido (primer login de esta clave acá): le damos ≤1,2s al fetch
+    // que viene corriendo en paralelo. Con caché (aún negativa) no se espera nada.
+    if (!login.displayName && !profileKnown && profileFetch) {
+      await Promise.race([profileFetch, new Promise((r) => setTimeout(r, 1200))]);
+    }
     try {
       const event = await signAuthChallenge(login.signer, m.challenge);
       net.authNostr(event, login.displayName || undefined);
