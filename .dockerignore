@@ -1,0 +1,10 @@
+# No mandamos node_modules ni builds al contexto (se generan en la imagen).
+# OJO: NO ignoramos game/bin/ — el WASM de Vexel está gitignoreado pero SÍ tiene
+# que ir al build (el web lo copia a web/public/game en el sync).
+**/node_modules
+.git
+web/dist
+server/dist
+deploy
+scratchpad
+*.log
