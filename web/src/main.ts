@@ -123,6 +123,10 @@ function start(): void {
     if ((e.target as HTMLElement).closest?.("[data-action=logout]")) logout();
   });
   wireNet();
+  // Con token: sesión inmediata sin depender del firmador (se restaura de fondo).
+  const token = readSessionToken();
+  if (token) return void authViaToken(token);
+  // Sin token pero con firmador guardado (raro): restaurar y firmar el challenge.
   if (hasStoredSigner()) return void restoreNostr();
   const name = storedName();
   if (!name) return renderLogin();
@@ -210,6 +214,19 @@ function sendNostrAuth(): void {
  */
 async function beginNostr(signer: ChessSigner): Promise<void> {
   renderConnecting();
+  const token = readSessionToken();
+  if (token) {
+    // Reconexión/reload: autenticamos por TOKEN sin bloquear en el firmador. La
+    // extensión puede tardar o directamente colgarse en getPublicKey; la sesión no
+    // debe depender de eso. El signer queda listo para features (marcador, retos);
+    // su pubkey/perfil se resuelven en segundo plano.
+    login = { kind: "nostr", signer: toNgpSigner(signer), displayName: "" };
+    net.connect();
+    net.authToken(token);
+    resolveProfileInBackground(signer);
+    return;
+  }
+  // Primer login (sin token todavía): necesitamos la pubkey y firmar el challenge.
   let pubkey: string;
   try {
     pubkey = await signer.getPublicKey();
@@ -232,7 +249,77 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
     })
     .catch(() => {});
   net.connect();
-  sendNostrAuth();
+  net.authChallenge();
+}
+
+/**
+ * Signer "perezoso": difiere a un firmador que se está restaurando en segundo plano.
+ * Permite tener sesión (por token) ANTES de que el firmador esté listo; las features
+ * que lo usen (marcador, retos) esperan a que resuelva. Si nunca resuelve (extensión
+ * ausente), esas features fallan solas — pero la sesión/partida sigue andando.
+ */
+function lazySigner(p: Promise<ChessSigner | null>): ChessSigner {
+  const real = async (): Promise<ChessSigner> => {
+    const s = await p;
+    if (!s) throw new Error("Firmador Nostr no disponible");
+    return s;
+  };
+  return {
+    method: "nip07",
+    getPublicKey: async () => (await real()).getPublicKey(),
+    signEvent: async (e) => (await real()).signEvent(e),
+    nip44Encrypt: async (pk, pt) => {
+      const s = await real();
+      if (!s.nip44Encrypt) throw new Error("sin NIP-44");
+      return s.nip44Encrypt(pk, pt);
+    },
+    nip44Decrypt: async (pk, ct) => {
+      const s = await real();
+      if (!s.nip44Decrypt) throw new Error("sin NIP-44");
+      return s.nip44Decrypt(pk, ct);
+    },
+  };
+}
+
+/**
+ * Reload/arranque con token: autentica por token DE INMEDIATO (sin esperar al
+ * firmador), y restaura el firmador en segundo plano para las features Nostr. Así
+ * la sesión no se pierde aunque la extensión tarde o se cuelgue en getPublicKey.
+ */
+function authViaToken(token: string): void {
+  renderConnecting();
+  const restorePromise = restoreSigner();
+  login = { kind: "nostr", signer: toNgpSigner(lazySigner(restorePromise)), displayName: "" };
+  net.connect();
+  net.authToken(token);
+  restorePromise
+    .then((s) => {
+      if (s && login?.kind === "nostr") {
+        login.signer = toNgpSigner(s); // reemplaza el perezoso por el real
+        resolveProfileInBackground(s);
+      }
+    })
+    .catch(() => {});
+}
+
+/** Resuelve pubkey + nombre de perfil en segundo plano (no bloquea la sesión por token). */
+function resolveProfileInBackground(signer: ChessSigner): void {
+  signer
+    .getPublicKey()
+    .then((pubkey) => {
+      updateStoredPubkey(pubkey);
+      const cached = readCachedProfile(pubkey);
+      if (cached.name && login?.kind === "nostr" && !login.displayName) login.displayName = cached.name;
+      if (!cached.known) {
+        void fetchProfile(pubkey)
+          .then((p) => {
+            writeCachedProfile(pubkey, p.name);
+            if (p.name && login?.kind === "nostr" && !login.displayName) login.displayName = p.name;
+          })
+          .catch(() => {});
+      }
+    })
+    .catch(() => {});
 }
 
 /**
