@@ -207,6 +207,37 @@ input[readonly] { color: var(--muted); font-family: var(--mono); font-size: 12px
   content: ""; flex: 1; height: 1px; background: var(--line, rgba(255,255,255,.12));
 }
 
+/* Login con solapas (Extensión · QR · Bunker · Clave local · Invitado) */
+.login-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 18px 0 20px;
+}
+.login-tab {
+  width: auto; padding: 7px 13px; font-size: 13px;
+  background: transparent; color: var(--muted); border: 1px solid var(--line);
+}
+.login-tab.active { background: var(--panel); color: var(--text); border-color: var(--gold-dark); }
+.login-panel { display: flex; flex-direction: column; gap: 12px; text-align: center; }
+button.btn-ghost {
+  background: transparent; color: var(--muted); border: 1px solid var(--line);
+}
+button.btn-ghost:hover { color: var(--text); border-color: var(--gold-dark); }
+.qr-box {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 240px; padding: 12px; background: #fff; border-radius: var(--radius);
+  color: #333; font-size: 13px;
+}
+.qr-box img { display: block; border-radius: 4px; }
+.nsec-box {
+  font-family: var(--mono, monospace); font-size: 13px; width: 100%;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 10px 12px; resize: none; word-break: break-all;
+}
+.logout {
+  width: auto; padding: 5px 11px; font-size: 12px;
+  background: transparent; color: var(--faint); border: 1px solid var(--line);
+}
+.logout:hover { color: var(--text); border-color: var(--gold-dark); }
+
 /* ---------------------------------------------------------- home */
 .home { max-width: 760px; margin: 0 auto; padding: 72px 28px 0; }
 .home-title { font-size: 40px; text-align: center; }

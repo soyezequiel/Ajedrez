@@ -3,13 +3,20 @@ import { WS_URL } from "./config.js";
 import { Net } from "./net.js";
 import { createBoard, type BoardController, type BoardKind, type MoveFn } from "./board.js";
 import {
-  forgetNostrLogin,
-  hasStoredNostrLogin,
-  makeSigner,
-  rememberNostrLogin,
+  clearActiveSigner,
+  createNip07Signer,
+  generateLocalSigner,
+  hasStoredSigner,
+  importNsec,
+  restoreSigner,
+  setActiveSigner,
   signAuthChallenge,
-  waitForNostr,
-} from "./nostr/signer.js";
+  toNgpSigner,
+  waitForNip07,
+  type ChessSigner,
+} from "./nostr/signer-core.js";
+import { connectBunker, startNostrConnect } from "./nostr/signer-nip46.js";
+import QRCode from "qrcode";
 import { fetchProfile } from "./nostr/relays.js";
 import { publishRating } from "./nostr/score.js";
 import { createPresence, type PresenceController } from "./nostr/presence.js";
@@ -110,8 +117,12 @@ function pendingJoin(): string | null {
 
 function start(): void {
   startVersionGuard(toast); // recarga sola si el server anuncia un build nuevo
+  // "Salir" (delegado: la topbar se re-renderiza en cada pantalla).
+  document.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest?.("[data-action=logout]")) logout();
+  });
   wireNet();
-  if (hasStoredNostrLogin()) return void startNostr(true);
+  if (hasStoredSigner()) return void restoreNostr();
   const name = storedName();
   if (!name) return renderLogin();
   login = { kind: "guest", name };
@@ -130,31 +141,96 @@ function loginWith(name: string): void {
 }
 
 /**
- * Login Nostr (NIP-07): detecta la extensión, obtiene la pubkey (dispara el
- * permiso), toma el nombre del perfil best-effort y arranca el handshake de
- * challenge. `auto` = reintento silencioso al recargar con sesión Nostr previa.
+ * Autentica con un ChessSigner ya obtenido (cualquier método: nip07/nip46/local).
+ * Toma el nombre del perfil best-effort y arranca el handshake de challenge.
  */
-async function startNostr(auto = false): Promise<void> {
+async function beginNostr(signer: ChessSigner): Promise<void> {
   renderConnecting();
-  const provider = await waitForNostr(auto ? 4000 : 1500);
-  if (!provider) {
-    forgetNostrLogin();
-    if (!auto) toast("No se detectó extensión Nostr. Probá Alby o nos2x.");
-    return renderLogin();
-  }
   let displayName = "";
   try {
-    const pubkey = await provider.getPublicKey();
+    const pubkey = await signer.getPublicKey();
     displayName = (await fetchProfile(pubkey)).name ?? "";
   } catch {
-    forgetNostrLogin();
-    toast("La extensión Nostr no autorizó el acceso.");
+    clearActiveSigner();
+    login = null;
+    toast("No se pudo obtener tu clave Nostr.");
     return renderLogin();
   }
-  login = { kind: "nostr", signer: makeSigner(provider), displayName };
-  rememberNostrLogin();
+  login = { kind: "nostr", signer: toNgpSigner(signer), displayName };
   net.connect();
   net.authChallenge();
+}
+
+/**
+ * Restaura la sesión Nostr guardada al reabrir. Si falla (p. ej. la extensión no
+ * está lista todavía) NO borra la sesión: cae al login pero reintenta al recargar.
+ */
+async function restoreNostr(): Promise<void> {
+  renderConnecting();
+  const signer = await restoreSigner();
+  if (!signer) return renderLogin();
+  await beginNostr(signer);
+}
+
+/** Login con extensión NIP-07 (Alby/nos2x). */
+async function loginNip07(): Promise<void> {
+  renderConnecting();
+  const provider = await waitForNip07(1500);
+  if (!provider) {
+    toast("No se detectó extensión Nostr. Probá Alby o nos2x.");
+    return renderLogin();
+  }
+  const signer = createNip07Signer();
+  setActiveSigner(signer, { method: "nip07" });
+  await beginNostr(signer);
+}
+
+/** Login con firmante remoto por bunker:// o NIP-05 (usuario@dominio). */
+async function loginBunker(input: string): Promise<void> {
+  renderConnecting();
+  try {
+    const { signer, stored } = await connectBunker(input, () =>
+      toast("El firmante pide autorización — revisá tu app de firma"),
+    );
+    setActiveSigner(signer, stored);
+    await beginNostr(signer);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : "No se pudo conectar al firmante");
+    renderLogin();
+  }
+}
+
+/** Login con clave local: nsec pegado o clave nueva generada en este navegador. */
+function loginLocal(nsec?: string): void {
+  let signer: ChessSigner;
+  let storedNsec: string;
+  try {
+    if (nsec && nsec.trim()) {
+      signer = importNsec(nsec);
+      storedNsec = nsec.trim();
+    } else {
+      const gen = generateLocalSigner();
+      signer = gen.signer;
+      storedNsec = gen.nsec;
+    }
+  } catch (e) {
+    return void toast(e instanceof Error ? e.message : "nsec inválido");
+  }
+  setActiveSigner(signer, { method: "local", nsec: storedNsec });
+  void beginNostr(signer);
+}
+
+/** Cierra la sesión (Nostr o invitado) y vuelve al login. */
+function logout(): void {
+  clearActiveSigner();
+  sessionStorage.removeItem(NAME_KEY);
+  login = null;
+  state.identity = null;
+  void presence?.stop();
+  presence = null;
+  inboxStop?.();
+  inboxStop = null;
+  location.reload();
 }
 
 /** Arranca la bandeja de retos NIP-17 (una vez, solo con login Nostr). */
@@ -226,7 +302,7 @@ function wireNet(): void {
       const event = await signAuthChallenge(login.signer, m.challenge);
       net.authNostr(event, login.displayName || undefined);
     } catch {
-      forgetNostrLogin();
+      clearActiveSigner();
       login = null;
       state.identity = null;
       toast("No se pudo firmar el login Nostr.");
@@ -450,22 +526,131 @@ function renderConnError(): void {
 
 // --------------------------------------------------------------- render: login
 
-function renderLogin(): void {
+type LoginTab = "extension" | "qr" | "bunker" | "local" | "guest";
+
+const LOGIN_TABS: { id: LoginTab; label: string }[] = [
+  { id: "extension", label: "Extensión" },
+  { id: "qr", label: "QR" },
+  { id: "bunker", label: "Bunker" },
+  { id: "local", label: "Clave local" },
+  { id: "guest", label: "Invitado" },
+];
+
+/** En celular no hay extensión: arrancamos en QR (escanear con la app de firma). */
+function defaultLoginTab(): LoginTab {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ? "qr" : "extension";
+}
+
+/** Corta el flujo QR (Nostr Connect) en curso al cambiar de solapa o salir. */
+let qrAbort: AbortController | null = null;
+
+function renderLogin(tab: LoginTab = defaultLoginTab()): void {
+  qrAbort?.abort();
+  qrAbort = null;
+  const bar = LOGIN_TABS.map(
+    (t) => `<button class="login-tab${t.id === tab ? " active" : ""}" data-tab="${t.id}">${t.label}</button>`,
+  ).join("");
   app.innerHTML = shell(`
     <p class="muted">Partidas 1v1 en tiempo real.</p>
-    <div class="stack">
-      <button class="btn-gold" id="nostr">Entrar con Nostr</button>
-      <p class="fine">Con tu clave Nostr habilitás marcador, retos, zaps y apuestas.</p>
+    <div class="login-tabs">${bar}</div>
+    <div class="login-panel" id="login-panel"></div>`);
+  document.querySelectorAll<HTMLButtonElement>(".login-tab").forEach((b) =>
+    b.addEventListener("click", () => renderLogin(b.dataset.tab as LoginTab)),
+  );
+  renderLoginTab(tab);
+}
+
+function renderLoginTab(tab: LoginTab): void {
+  const panel = document.getElementById("login-panel")!;
+  if (tab === "extension") {
+    panel.innerHTML = `
+      <button class="btn-gold" id="nostr">Entrar con extensión</button>
+      <p class="fine">Alby o nos2x. Habilita marcador, retos, zaps y apuestas.</p>`;
+    panel.querySelector("#nostr")!.addEventListener("click", () => void loginNip07());
+  } else if (tab === "qr") {
+    panel.innerHTML = `
+      <p class="fine">Escaneá con tu app de firma (Amber, Primal, nsec.app), o abrí el enlace en el celu.</p>
+      <div id="qr-box" class="qr-box">Generando código…</div>
+      <a id="qr-link" class="btn-ghost" style="display:none">Abrir en la app de firma</a>`;
+    startQrLogin();
+  } else if (tab === "bunker") {
+    panel.innerHTML = `
+      <input id="bunker-input" placeholder="bunker://… o usuario@dominio" />
+      <button class="btn-gold" id="bunker-go">Conectar</button>
+      <p class="fine">Pegá un bunker:// de tu firmante, o un NIP-05 (usuario@dominio).</p>`;
+    const inp = panel.querySelector("#bunker-input") as HTMLInputElement;
+    const go = () => inp.value.trim() && void loginBunker(inp.value);
+    panel.querySelector("#bunker-go")!.addEventListener("click", go);
+    inp.addEventListener("keydown", (e) => e.key === "Enter" && go());
+  } else if (tab === "local") {
+    panel.innerHTML = `
+      <input id="nsec-input" placeholder="nsec1…" />
+      <button class="btn-gold" id="local-import">Entrar con mi nsec</button>
       <div class="login-or"><span>o</span></div>
+      <button class="btn-ghost" id="local-new">Crear una clave nueva</button>
+      <p class="fine">La clave vive solo en este navegador. Si la generás, guardala: es tu identidad.</p>`;
+    const inp = panel.querySelector("#nsec-input") as HTMLInputElement;
+    panel.querySelector("#local-import")!.addEventListener("click", () => inp.value.trim() && loginLocal(inp.value));
+    inp.addEventListener("keydown", (e) => e.key === "Enter" && inp.value.trim() && loginLocal(inp.value));
+    panel.querySelector("#local-new")!.addEventListener("click", showGeneratedKey);
+  } else {
+    panel.innerHTML = `
       <input id="name" placeholder="Tu nombre" />
-      <button id="go">Entrar como invitado</button>
-    </div>
-    <p class="fine">Invitado: solo jugás partidas — sin marcador ni apuestas.</p>`);
-  document.getElementById("nostr")!.addEventListener("click", () => void startNostr(false));
-  const input = document.getElementById("name") as HTMLInputElement;
-  const go = () => input.value.trim() && loginWith(input.value);
-  document.getElementById("go")!.addEventListener("click", go);
-  input.addEventListener("keydown", (e) => e.key === "Enter" && go());
+      <button class="btn-gold" id="go">Entrar como invitado</button>
+      <p class="fine">Invitado: solo jugás partidas — sin marcador ni apuestas.</p>`;
+    const inp = panel.querySelector("#name") as HTMLInputElement;
+    const go = () => inp.value.trim() && loginWith(inp.value);
+    panel.querySelector("#go")!.addEventListener("click", go);
+    inp.addEventListener("keydown", (e) => e.key === "Enter" && go());
+  }
+}
+
+/** Arranca el handshake Nostr Connect y muestra el QR; resuelve al aceptar. */
+function startQrLogin(): void {
+  qrAbort = new AbortController();
+  const box = document.getElementById("qr-box");
+  const link = document.getElementById("qr-link") as HTMLAnchorElement | null;
+  const { uri, established } = startNostrConnect({ signal: qrAbort.signal });
+  QRCode.toDataURL(uri, { margin: 1, width: 240 })
+    .then((url) => {
+      if (box) box.innerHTML = `<img src="${url}" alt="QR Nostr Connect" width="240" height="240" />`;
+    })
+    .catch(() => {
+      if (box) box.textContent = "No se pudo generar el QR.";
+    });
+  if (link) {
+    link.href = uri;
+    link.style.display = "";
+  }
+  established
+    .then(({ signer, stored }) => {
+      setActiveSigner(signer, stored);
+      void beginNostr(signer);
+    })
+    .catch((e: unknown) => {
+      // Ignoramos el abort al cambiar de solapa; el resto lo avisamos.
+      if (qrAbort?.signal.aborted) return;
+      toast(e instanceof Error ? e.message : "Falló la conexión con el firmante");
+    });
+}
+
+/** Genera una clave nueva y la muestra para respaldo antes de entrar. */
+function showGeneratedKey(): void {
+  const { signer, nsec } = generateLocalSigner();
+  const panel = document.getElementById("login-panel")!;
+  panel.innerHTML = `
+    <p class="fine">Esta es tu clave privada. <b>Guardala</b>: es tu identidad y no se puede recuperar.</p>
+    <textarea id="new-nsec" class="nsec-box" readonly rows="2">${nsec}</textarea>
+    <button class="btn-ghost" id="copy-nsec">Copiar</button>
+    <button class="btn-gold" id="new-continue">Ya la guardé — entrar</button>`;
+  panel.querySelector("#copy-nsec")!.addEventListener("click", () => {
+    void navigator.clipboard?.writeText(nsec);
+    toast("Clave copiada");
+  });
+  panel.querySelector("#new-continue")!.addEventListener("click", () => {
+    setActiveSigner(signer, { method: "local", nsec });
+    void beginNostr(signer);
+  });
 }
 
 // --------------------------------------------------------------- render: topbar
@@ -476,7 +661,7 @@ function topbar(): string {
     <header class="topbar">
       <span class="brand"><span class="mark">♞</span>Ajedrez</span>
       <span class="spacer"></span>
-      ${id ? `<span class="me"><span class="avatar">${initials(id.displayName)}</span>${id.displayName}</span>` : ""}
+      ${id ? `<span class="me"><span class="avatar">${initials(id.displayName)}</span>${id.displayName}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
     </header>`;
 }
 
