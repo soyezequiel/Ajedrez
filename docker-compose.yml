@@ -1,0 +1,61 @@
+name: ajedrez
+
+# Self-host del server autoritativo de ajedrez (un solo proceso: HTTP + WebSocket +
+# sirve web/dist). Corre en la MISMA laptop que Luna Negra, en su propio contenedor.
+#
+# Deploy desde la PC de dev (Windows):  npm run deploy
+#   → empaqueta el árbol, lo manda por SSH (alias `luna`) y reconstruye acá.
+#
+# Arranque manual en la laptop (si hiciera falta):
+#   docker compose up -d --build --wait
+#
+# El secreto NGE_CONNECTION NO va en este archivo ni en la imagen: vive en
+# .env.docker (junto a este compose, en la laptop; gitignoreado). El rating ELO
+# persiste en el volumen `ratings` (sobrevive a rebuilds/redeploys).
+
+services:
+  ajedrez:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Lo setea `npm run deploy` (sha+timestamp). Vacío en un build manual → la
+        # guardia de versión del web queda inerte (no recarga).
+        BUILD_ID: ${BUILD_ID:-}
+    image: ajedrez-server
+    # El túnel de Luna rutea ajedrez.naranja.fit → http://ajedrez:8788 (por nombre de
+    # contenedor en la red luna-negra_default). Por eso el contenedor se llama `ajedrez`
+    # y se une a esa red (abajo). Así el dominio muestra ESTE build sin tocar el dashboard.
+    container_name: ajedrez
+    restart: unless-stopped
+    # Secretos y overrides opcionales (NGE_CONNECTION, DEFAULT_CLOCK_MS, ...).
+    # El archivo debe existir (docker compose falla si no): `npm run deploy` hace
+    # `touch` para garantizarlo. Sin NGE_CONNECTION, las apuestas quedan apagadas
+    # (caps.bets=false) y el resto del juego funciona igual.
+    env_file:
+      - .env.docker
+    environment:
+      NODE_ENV: production
+      PORT: 8788
+      # El rating ELO se persiste acá (dentro del volumen `ratings`).
+      RATINGS_PATH: /data/ratings.json
+    volumes:
+      - ratings:/data
+    # Acceso directo por LAN/local (además del túnel). El host 8790 evita chocar
+    # con Luna Negra (que usa 3000). Adentro el server escucha en 8788.
+    ports:
+      - "8790:8788"
+    # `luna` = red del stack de Luna (donde vive el cloudflared del túnel). Al unirse,
+    # el túnel alcanza a este contenedor como http://ajedrez:8788. Requiere que el
+    # stack de Luna esté arriba (su compose crea la red luna-negra_default).
+    networks:
+      - default
+      - luna
+
+networks:
+  luna:
+    external: true
+    name: luna-negra_default
+
+volumes:
+  ratings:

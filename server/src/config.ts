@@ -18,6 +18,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const config = {
   port: Number(process.env.PORT ?? 8787),
 
+  /** Identificador del build en curso. Lo fija el deploy (BUILD_ID = sha+timestamp)
+   *  y lo reporta GET /version; el web compara contra el suyo y recarga si cambió.
+   *  Vacío en dev/local → la guardia del cliente no hace nada. */
+  buildId: process.env.BUILD_ID ?? "",
+
   /** Store de ratings ELO (JSON en disco). En Docker mapear a un volumen para
    *  que sobreviva a redeploys (ver deploy/). */
   ratingsPath: process.env.RATINGS_PATH ?? join(here, "..", "data", "ratings.json"),

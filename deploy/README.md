@@ -1,9 +1,61 @@
-# Deploy del server de ajedrez en un VPS
+# Deploy del server de ajedrez
 
 El server (`server/`) es la **autoridad**: valida jugadas, lleva el reloj, declara
 ganadores **y sirve el build del `web/`** (HTTP + WebSocket en el mismo puerto). Es un
-proceso de larga vida → va en un VPS. Como sirve el web él mismo, **no hace falta
-Vercel** ni ningún hosting estático aparte.
+proceso de larga vida. Como sirve el web él mismo, **no hace falta Vercel** ni ningún
+hosting estático aparte.
+
+---
+
+## Recomendado: `npm run deploy` (Docker por SSH a la laptop)
+
+Deploy en un comando a la **misma laptop que Luna Negra** (self-host Docker). Desde
+la raíz del repo, en la PC de dev (Windows):
+
+```powershell
+npm run deploy
+```
+
+Qué hace (`deploy/deploy.ps1`, o `deploy/deploy.sh` con `npm run deploy:sh`):
+
+1. Verifica que esté el WASM de Vexel (`game/bin/ajedrez.wasm`) — el build del web lo
+   copia (`sync-game`) y está gitignoreado, así que tiene que viajar en el paquete.
+2. Empaqueta el árbol con `tar` (sin `node_modules`, builds ni secretos).
+3. Lo manda por `scp` a la laptop (alias SSH **`luna`**).
+4. Reconstruye la imagen del `Dockerfile` y levanta el contenedor con
+   `docker compose up -d --build --wait` en `~/ajedrez`. `--wait` usa el
+   `HEALTHCHECK` como compuerta: si el server no queda *healthy*, el deploy **falla**.
+
+Persistencia y secretos:
+
+- **Rating ELO** → volumen Docker `ratings` (`/data/ratings.json`). Sobrevive a
+  rebuilds/redeploys. No se pierde al actualizar el código.
+- **`NGE_CONNECTION`** (secreto del escrow, para apuestas) → vive **solo** en
+  `~/ajedrez/.env.docker` en la laptop. Nunca viaja en el paquete ni entra en la
+  imagen. El primer deploy funciona sin él (apuestas apagadas, `caps.bets=false`);
+  para habilitarlas creá el archivo (ver `.env.docker.example`) y redeployá.
+
+Acceso:
+
+- **LAN/local:** `http://192.168.3.25:8790` (el contenedor escucha en 8788 adentro,
+  publicado en 8790 afuera para no chocar con Luna Negra, que usa 3000).
+- **Público (por el túnel de Cloudflare de Luna):** el `cloudflared` de Luna ya corre
+  en la laptop. Para exponer el ajedrez con dominio estable (ej.
+  `ajedrez.naranja.fit`):
+  1. En `docker-compose.yml` descomentá el bloque `networks:` (conecta el contenedor
+     a la red `luna-negra_default` del stack de Luna) y redeployá.
+  2. En el dashboard de **Cloudflare Zero Trust → Tunnels → (tu túnel) → Public
+     Hostnames**, agregá `ajedrez.naranja.fit` → `http://ajedrez-server:8788`.
+  Como es el mismo origen, el `wss://` se deriva solo — no hay que configurar URLs.
+
+Logs en vivo:  `npm run deploy:logs`  (o `ssh luna "cd ajedrez && docker compose logs -f"`).
+
+---
+
+## Alternativa: VPS con systemd + Caddy (sin Docker)
+
+> Este runbook aplica si querés exponerlo en otro VPS con TLS propio. Para jugar en tu
+> propia máquina o en la LAN alcanza con `npm start` desde la raíz (ver README raíz).
 
 > Este runbook aplica si querés exponerlo en internet con TLS. Para jugar en tu
 > propia máquina o en la LAN alcanza con `npm start` desde la raíz (ver README raíz).

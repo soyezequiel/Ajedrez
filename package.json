@@ -10,6 +10,9 @@
     "serve": "npm --prefix server run start",
     "dev:server": "npm --prefix server run dev",
     "dev:web": "npm --prefix web run dev",
-    "test": "npm --prefix server test"
+    "test": "npm --prefix server test",
+    "deploy": "powershell -ExecutionPolicy Bypass -File deploy/deploy.ps1",
+    "deploy:sh": "bash deploy/deploy.sh",
+    "deploy:logs": "ssh luna \"cd ajedrez && docker compose logs -f --tail=100\""
   }
 }

@@ -50,7 +50,13 @@ const app = express();
 app.use(cors());
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, rooms: rooms.all().length });
+  res.json({ ok: true, rooms: rooms.all().length, buildId: config.buildId });
+});
+
+// El web sondea esto y, si el buildId difiere del suyo, recarga (ver web/src/version.ts).
+app.get("/version", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ buildId: config.buildId });
 });
 
 // Sirve el build del web (deploy unificado: HTTP + WS en el mismo puerto). En dev
@@ -63,9 +69,15 @@ if (existsSync(webDist)) {
     res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
     next();
   });
-  app.use(express.static(webDist));
+  // index:false → el index NO se sirve desde acá; cae al handler de abajo, que le
+  // pone no-cache (así un deploy nuevo no queda tapado por caché del borde/Cloudflare).
+  // Los assets llevan hash en el nombre (Vite), así que su caché por defecto es segura.
+  app.use(express.static(webDist, { index: false }));
   // Cualquier ruta no-archivo sirve el index (el shell rutea por query string).
-  app.get("*", (_req, res) => res.sendFile(join(webDist, "index.html")));
+  app.get("*", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.sendFile(join(webDist, "index.html"));
+  });
 } else {
   console.warn(
     "[ajedrez] web/dist no existe — buildeá el web ('npm --prefix web run build') " +

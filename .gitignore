@@ -8,3 +8,7 @@ node_modules/
 
 # Store de ratings ELO (estado en disco; en prod va a un volumen).
 server/data/
+
+# Config de prod del contenedor (secreto NGE_CONNECTION) — vive solo en la laptop.
+# OJO: `*.env` no matchea `.env.docker` (no termina en `.env`), por eso va explícito.
+.env.docker

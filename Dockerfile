@@ -8,15 +8,25 @@
 # ---------- Stage 1: build del web (genera web/dist) ----------
 FROM node:22-slim AS webbuild
 WORKDIR /app
+# `nostr-game-protocol` es una dependencia git (github:...); `npm ci` la clona con
+# git, que node:22-slim NO trae → sin esto el build rompe. (Mismo gotcha que Luna.)
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+  && rm -rf /var/lib/apt/lists/*
 COPY web/package.json web/package-lock.json ./web/
 RUN npm --prefix web ci
 COPY web/ ./web/
 COPY game/ ./game/
-RUN npm --prefix web run build   # sync (copia game/bin + textures) + tsc + vite build
+# BUILD_ID (sha+timestamp que fija el deploy) se hornea en el bundle vía Vite define,
+# para que el web sepa qué build es y detecte deploys nuevos (ver web/src/version.ts).
+ARG BUILD_ID=""
+RUN BUILD_ID="$BUILD_ID" npm --prefix web run build   # sync (game/bin+textures) + tsc + vite build
 
 # ---------- Stage 2: runtime (server + web/dist) ----------
 FROM node:22-slim AS runtime
 WORKDIR /app
+# git: server también depende de `nostr-game-protocol` por github: (npm ci lo clona).
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+  && rm -rf /var/lib/apt/lists/*
 # tsx es devDependency pero se necesita en runtime (el server corre con --import tsx),
 # así que instalamos incluyendo dev.
 COPY server/package.json server/package-lock.json ./server/
@@ -24,6 +34,10 @@ RUN npm --prefix server ci --include=dev
 COPY server/ ./server/
 COPY --from=webbuild /app/web/dist ./web/dist
 
+# BUILD_ID también en runtime: el server lo reporta en GET /version (mismo valor que
+# el horneado en el web, así una pestaña vieja detecta el deploy y recarga).
+ARG BUILD_ID=""
+ENV BUILD_ID=$BUILD_ID
 ENV NODE_ENV=production
 ENV PORT=8788
 EXPOSE 8788
