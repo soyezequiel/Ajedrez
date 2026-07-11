@@ -29,8 +29,10 @@ export async function createZapInvoice(
   amountSats: number,
   comment: string,
 ): Promise<ZapInvoice> {
-  const { lud16 } = await fetchProfile(recipientPubkey);
-  if (!lud16) throw new Error("El rival no tiene dirección Lightning en su perfil");
+  // Ventana holgada (6 s): algunos perfiles viven sobre todo en un relay lento
+  // (p. ej. primal) y con los 2,5 s por defecto el kind:0 no llega y parece "sin lud16".
+  const { lud16 } = await fetchProfile(recipientPubkey, 6000);
+  if (!lud16) throw new Error("El rival no tiene dirección Lightning en su perfil (o no llegó a tiempo)");
   const [name, domain] = lud16.split("@");
   if (!name || !domain) throw new Error("Dirección Lightning inválida");
 
