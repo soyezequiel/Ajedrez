@@ -112,13 +112,11 @@ function storedName(): string | null {
   return sessionStorage.getItem(NAME_KEY);
 }
 
+/** Link de entrada a sala. `?join=<id>` es el formato estándar (NGP): sirve para el
+ *  invite propio Y para el Room Link de la tienda. La sala se crea lazy (unir-o-crear)
+ *  al abrir el link — por eso el id puede no pre-existir. Validamos el formato. */
 function pendingJoin(): string | null {
-  return new URLSearchParams(location.search).get("join");
-}
-
-/** Room Link de Luna: `?lnRoom=<id>` (sala hosteada por el juego, creada lazy). */
-function pendingLnRoom(): string | null {
-  const v = new URLSearchParams(location.search).get("lnRoom");
+  const v = new URLSearchParams(location.search).get("join");
   return v && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : null;
 }
 
@@ -488,11 +486,9 @@ function wireNet(): void {
     state.identity = m.identity;
     startInbox();
     const join = pendingJoin();
-    const lnRoom = pendingLnRoom();
     cleanUrl();
     if (state.room) net.joinRoom({ roomId: state.room.id }); // reconexión: volver a la sala
-    else if (lnRoom) net.enterRoom(lnRoom); // Room Link de Luna: unir/crear esa sala
-    else if (join) net.joinRoom({ roomId: join });
+    else if (join) net.enterRoom(join); // ?join: unir-o-crear (invite propio o Room Link)
     else renderHome();
   });
   net.on("room", (m) => {
@@ -588,8 +584,7 @@ let reconnectDelay = 1000;
 function cleanUrl(): void {
   const url = new URL(location.href);
   url.searchParams.delete("join");
-  url.searchParams.delete("lnRoom");
-  url.searchParams.delete("lnOrigin");
+  url.searchParams.delete("lnOrigin"); // param informativo de la tienda (Room Link)
   history.replaceState(null, "", url.toString());
 }
 

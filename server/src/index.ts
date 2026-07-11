@@ -228,12 +228,12 @@ function handleCreate(ws: WebSocket, state: ConnState): void {
   broadcastRoom(room);
 }
 
-/** Room Link (Luna `?lnRoom=<id>`): entra a la sala por su id externo, creándola
- *  lazy si no existe. Público: cualquiera con el link entra (identidad ya validada
- *  por el login Nostr de este socket). */
+/** Entrada a sala por `?join=<id>` (invite propio o Room Link de la tienda): entra a
+ *  la sala por su id, creándola lazy si no existe. Público: cualquiera con el link
+ *  entra (identidad ya validada por el login Nostr de este socket). */
 function handleEnterRoom(ws: WebSocket, state: ConnState, roomId: string): void {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(roomId))
-    return send(ws, { t: "error", code: "BAD_ROOM_ID", message: "lnRoom inválido" });
+    return send(ws, { t: "error", code: "BAD_ROOM_ID", message: "id de sala inválido" });
   const me = identity(state);
   const room = rooms.enterByExternalId(roomId, {
     npub: me.npub,
