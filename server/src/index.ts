@@ -135,6 +135,8 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
       return handleCreate(ws, state);
     case "join_room":
       return handleJoin(ws, state, msg.roomId, msg.code);
+    case "enter_room":
+      return handleEnterRoom(ws, state, msg.roomId);
     case "ready":
       return handleReady(ws, state);
     case "move":
@@ -224,6 +226,23 @@ function handleCreate(ws: WebSocket, state: ConnState): void {
   const room = rooms.create({ npub: me.npub, displayName: me.displayName, pubkey: me.pubkey });
   attachToRoom(ws, state, room);
   broadcastRoom(room);
+}
+
+/** Room Link (Luna `?lnRoom=<id>`): entra a la sala por su id externo, creándola
+ *  lazy si no existe. Público: cualquiera con el link entra (identidad ya validada
+ *  por el login Nostr de este socket). */
+function handleEnterRoom(ws: WebSocket, state: ConnState, roomId: string): void {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(roomId))
+    return send(ws, { t: "error", code: "BAD_ROOM_ID", message: "lnRoom inválido" });
+  const me = identity(state);
+  const room = rooms.enterByExternalId(roomId, {
+    npub: me.npub,
+    displayName: me.displayName,
+    pubkey: me.pubkey,
+  });
+  attachToRoom(ws, state, room);
+  broadcastRoom(room);
+  resync(ws, room);
 }
 
 function handleJoin(

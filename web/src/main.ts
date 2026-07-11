@@ -116,6 +116,12 @@ function pendingJoin(): string | null {
   return new URLSearchParams(location.search).get("join");
 }
 
+/** Room Link de Luna: `?lnRoom=<id>` (sala hosteada por el juego, creada lazy). */
+function pendingLnRoom(): string | null {
+  const v = new URLSearchParams(location.search).get("lnRoom");
+  return v && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : null;
+}
+
 function start(): void {
   startVersionGuard(toast); // recarga sola si el server anuncia un build nuevo
   // "Salir" (delegado: la topbar se re-renderiza en cada pantalla).
@@ -482,8 +488,10 @@ function wireNet(): void {
     state.identity = m.identity;
     startInbox();
     const join = pendingJoin();
+    const lnRoom = pendingLnRoom();
     cleanUrl();
     if (state.room) net.joinRoom({ roomId: state.room.id }); // reconexión: volver a la sala
+    else if (lnRoom) net.enterRoom(lnRoom); // Room Link de Luna: unir/crear esa sala
     else if (join) net.joinRoom({ roomId: join });
     else renderHome();
   });
@@ -580,6 +588,8 @@ let reconnectDelay = 1000;
 function cleanUrl(): void {
   const url = new URL(location.href);
   url.searchParams.delete("join");
+  url.searchParams.delete("lnRoom");
+  url.searchParams.delete("lnOrigin");
   history.replaceState(null, "", url.toString());
 }
 

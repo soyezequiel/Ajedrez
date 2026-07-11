@@ -38,8 +38,10 @@ export class Room {
   /** Oferta de tablas pendiente del npub que la ofreció. */
   drawOfferBy: Npub | null = null;
 
-  constructor(host: PlayerInit) {
-    this.id = `room_${randomBytes(6).toString("hex")}`;
+  constructor(host: PlayerInit, id?: string) {
+    // `id` externo = sala de Room Link de Luna (`?lnRoom=<id>`, creada lazy). Sin
+    // id, generamos uno propio (flujo "Crear sala" normal).
+    this.id = id ?? `room_${randomBytes(6).toString("hex")}`;
     this.code = makeCode();
     this.hostNpub = host.npub;
     this.players.set(host.npub, {
@@ -117,6 +119,21 @@ export class RoomManager {
 
   get(roomId: string): Room | undefined {
     return this.byId.get(roomId);
+  }
+
+  /** Room Link: entra a la sala `roomId` (elegida por Luna); la crea lazy con ese
+   *  id si no existe (el que abre primero es host/blancas). Idempotente por npub;
+   *  lanza ROOM_FULL si está completa con otros dos jugadores. */
+  enterByExternalId(roomId: string, player: PlayerInit): Room {
+    const existing = this.byId.get(roomId);
+    if (existing) {
+      existing.join(player);
+      return existing;
+    }
+    const room = new Room(player, roomId);
+    this.byId.set(room.id, room);
+    this.byCode.set(room.code, room.id);
+    return room;
   }
 
   getByCode(code: string): Room | undefined {

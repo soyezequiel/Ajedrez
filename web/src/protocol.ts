@@ -86,6 +86,7 @@ export type ClientMessage =
   | { t: "auth_token"; token: string }
   | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
+  | { t: "enter_room"; roomId: string }
   | { t: "ready" }
   | { t: "move"; move: MovePayload }
   | { t: "resign" }

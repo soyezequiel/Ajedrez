@@ -50,6 +50,7 @@ export class Net {
   authToken(token: string) { this.send({ t: "auth_token", token }); }
   createRoom() { this.send({ t: "create_room" }); }
   joinRoom(opts: { roomId?: string; code?: string }) { this.send({ t: "join_room", ...opts }); }
+  enterRoom(roomId: string) { this.send({ t: "enter_room", roomId }); }
   ready() { this.send({ t: "ready" }); }
   move(from: string, to: string, promotion?: "q" | "r" | "b" | "n") {
     this.send({ t: "move", move: { from, to, promotion } });
