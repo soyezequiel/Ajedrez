@@ -16,6 +16,8 @@
     "chess.js": "^1.0.0-beta.8",
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "nostr-game-protocol": "github:soyezequiel/Nostr-Game-Protocol",
+    "nostr-tools": "^2.23.9",
     "ws": "^8.18.0"
   },
   "devDependencies": {

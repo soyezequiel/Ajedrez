@@ -8,3 +8,7 @@ server/dist
 deploy
 scratchpad
 *.log
+# El secreto NGE_CONNECTION se pasa al contenedor en RUNTIME (docker run -e /
+# compose), NO se hornea en la imagen. El store de ratings va a un volumen.
+**/.env
+server/data

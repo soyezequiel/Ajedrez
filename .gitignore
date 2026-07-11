@@ -1,2 +1,10 @@
 node_modules/
 *.log
+
+# Secretos (NGE_CONNECTION del escrow) y config local — nunca al repo.
+.env
+*.env
+!*.env.example
+
+# Store de ratings ELO (estado en disco; en prod va a un volumen).
+server/data/

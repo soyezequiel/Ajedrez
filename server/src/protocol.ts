@@ -1,10 +1,29 @@
-import type { MatchResult, MatchSnapshot, MovePayload } from "./types.js";
+import type { Event } from "nostr-tools/pure";
+import type { Color, MatchResult, MatchSnapshot, MovePayload } from "./types.js";
 import type { RoomPhase, RoomPlayer } from "./rooms.js";
+import type { RatingChange } from "./ratings.js";
 
-/** Identidad del jugador (login local por nombre). */
+/** Vista de la apuesta de una sala que se broadcastea (sin bolt11 privados). */
+export interface BetView {
+  betId: string;
+  status: string;
+  stakeSats: number;
+  potSats: number;
+  seats: { color: Color; deposited: boolean }[];
+}
+
+/**
+ * Identidad del jugador. Dos modos:
+ *   - Invitado (`guest:true`): login local por nombre, `npub`=`u_<slug>`, sin
+ *     `pubkey`. No habilita features NGP (marcador, retos, zaps, apuestas).
+ *   - Nostr (`guest:false`): `npub` real y `pubkey` hex verificados por firma.
+ */
 export interface SessionIdentity {
   npub: string;
   displayName: string;
+  guest: boolean;
+  /** Pubkey hex, presente solo en login Nostr. */
+  pubkey?: string;
 }
 
 /** Vista de sala que se manda al cliente (sin estado interno del motor). */
@@ -19,6 +38,10 @@ export interface RoomView {
 /** Mensajes cliente → servidor. */
 export type ClientMessage =
   | { t: "auth"; token: string }
+  /** Login Nostr: pide un reto para firmar (NIP-42). */
+  | { t: "auth_challenge" }
+  /** Login Nostr: evento kind:22242 firmado sobre el reto + display name best-effort. */
+  | { t: "auth_nostr"; event: Event; displayName?: string }
   | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
   | { t: "ready" }
@@ -26,15 +49,29 @@ export type ClientMessage =
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
+  /** El anfitrión propone una apuesta por `stakeSats` (por asiento). */
+  | { t: "propose_bet"; stakeSats: number }
+  /** Cancela la apuesta pre-fondeo. */
+  | { t: "cancel_bet" }
   | { t: "leave" };
 
 /** Mensajes servidor → cliente. */
 export type ServerMessage =
   | { t: "authed"; identity: SessionIdentity }
+  /** Capacidades del server (p. ej. si el escrow de apuestas está activo). */
+  | { t: "caps"; bets: boolean }
+  /** Reto a firmar para el login Nostr (NIP-42). */
+  | { t: "challenge"; challenge: string }
   | { t: "error"; code: string; message: string }
+  /** Estado de la apuesta de la sala (broadcast, sin bolt11 privados). */
+  | { t: "bet"; bet: BetView }
+  /** Invoice de depósito privado del asiento de ESTE socket. */
+  | { t: "bet_invoice"; betId: string; bolt11: string | null; amountSats: number; stakeSats: number }
+  /** La apuesta se cerró (cancelada, anulada o liquidada). */
+  | { t: "bet_closed"; reason: string }
   | { t: "room"; room: RoomView }
   | { t: "match"; snapshot: MatchSnapshot }
   | { t: "draw_offer"; byNpub: string }
-  | { t: "ended"; result: MatchResult; winnerNpubs: string[] }
+  | { t: "ended"; result: MatchResult; winnerNpubs: string[]; ratings?: RatingChange[] }
   /** Un jugador se desconectó (online=false, con gracia para volver) o volvió. */
   | { t: "presence"; npub: string; online: boolean; graceMs?: number };

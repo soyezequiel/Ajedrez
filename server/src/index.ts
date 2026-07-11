@@ -8,14 +8,32 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { config } from "./config.js";
 import { MatchError } from "./chessMatch.js";
 import { Room, RoomError, RoomManager } from "./rooms.js";
-import type { ClientMessage, RoomView, ServerMessage, SessionIdentity } from "./protocol.js";
-import type { MovePayload, Npub } from "./types.js";
+import { AuthError, makeChallenge, verifyNostrAuth } from "./nostrAuth.js";
+import { applyResult, type RatingChange } from "./ratings.js";
+import { BetError, betsEnabled, cancelBet, createBet, settleBet, watchBet } from "./bets.js";
+import type { NgeBet } from "nostr-game-protocol/nge";
+import type { Event } from "nostr-tools/pure";
+import type { BetView, ClientMessage, RoomView, ServerMessage, SessionIdentity } from "./protocol.js";
+import type { Color, MovePayload, Npub } from "./types.js";
+
+/** Apuesta activa por sala (el escrow NGE la custodia server-side). */
+interface BetRecord {
+  betId: string;
+  stakeSats: number;
+  /** true una vez que se fondeó y arrancó la partida (evita doble arranque). */
+  started: boolean;
+  /** Corta el watch del escrow. */
+  stop?: () => void;
+}
+const betsByRoom = new Map<string, BetRecord>();
 
 const rooms = new RoomManager();
 
 interface ConnState {
   identity?: SessionIdentity;
   roomId?: string;
+  /** Reto de login Nostr emitido a esta conexión, pendiente de firma. */
+  challenge?: string;
 }
 const conns = new Map<WebSocket, ConnState>();
 const roomSockets = new Map<string, Set<WebSocket>>();
@@ -70,7 +88,13 @@ wss.on("connection", (ws) => {
       return send(ws, { t: "error", code: "BAD_JSON", message: "JSON inválido" });
     }
     handleMessage(ws, msg).catch((err) => {
-      const code = err instanceof MatchError || err instanceof RoomError ? err.code : "INTERNAL";
+      const code =
+        err instanceof MatchError ||
+        err instanceof RoomError ||
+        err instanceof AuthError ||
+        err instanceof BetError
+          ? err.code
+          : "INTERNAL";
       send(ws, { t: "error", code, message: String(err.message ?? err) });
     });
   });
@@ -82,6 +106,8 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
   if (!state) return;
 
   if (msg.t === "auth") return handleAuth(ws, state, msg.token);
+  if (msg.t === "auth_challenge") return handleAuthChallenge(ws, state);
+  if (msg.t === "auth_nostr") return handleAuthNostr(ws, state, msg.event, msg.displayName);
   if (!state.identity)
     return send(ws, { t: "error", code: "UNAUTHED", message: "Autenticate primero" });
 
@@ -100,18 +126,23 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
       return handleOfferDraw(ws, state);
     case "accept_draw":
       return handleAcceptDraw(ws, state);
+    case "propose_bet":
+      return handleProposeBet(ws, state, msg.stakeSats);
+    case "cancel_bet":
+      return handleCancelBet(ws, state);
     case "leave":
       return handleDisconnect(ws);
   }
 }
 
-/** Login local por nombre: derivamos un id estable del nombre elegido. */
+/** Login invitado por nombre: derivamos un id estable del nombre elegido. */
 function handleAuth(ws: WebSocket, state: ConnState, token: string): void {
   const identity = makeIdentity(token);
   if (!identity)
     return send(ws, { t: "error", code: "INVALID_TOKEN", message: "Nombre inválido" });
   state.identity = identity;
   send(ws, { t: "authed", identity });
+  send(ws, { t: "caps", bets: betsEnabled() });
 }
 
 /** `token` = nombre del jugador. Id estable por nombre (para reconexión). */
@@ -119,12 +150,42 @@ function makeIdentity(token: string): SessionIdentity | null {
   const name = token.trim();
   if (!name) return null;
   const slug = name.toLowerCase().replace(/[^a-z0-9]/g, "") || "anon";
-  return { npub: `u_${slug}`, displayName: name };
+  return { npub: `u_${slug}`, displayName: name, guest: true };
+}
+
+/** Login Nostr, paso 1: emite un reto para que el jugador lo firme (NIP-42). */
+function handleAuthChallenge(ws: WebSocket, state: ConnState): void {
+  state.challenge = makeChallenge();
+  send(ws, { t: "challenge", challenge: state.challenge });
+}
+
+/** Login Nostr, paso 2: verifica la firma del reto y fija la identidad real. */
+function handleAuthNostr(
+  ws: WebSocket,
+  state: ConnState,
+  event: Event,
+  displayName?: string,
+): void {
+  if (!state.challenge)
+    return send(ws, { t: "error", code: "NO_CHALLENGE", message: "Pedí un challenge primero" });
+  const { pubkey, npub } = verifyNostrAuth(event, state.challenge);
+  state.challenge = undefined;
+  const name = cleanDisplayName(displayName) ?? `${npub.slice(0, 12)}…`;
+  state.identity = { npub, pubkey, displayName: name, guest: false };
+  send(ws, { t: "authed", identity: state.identity });
+  send(ws, { t: "caps", bets: betsEnabled() });
+}
+
+/** Display name best-effort del perfil: no es sensible (la firma es la auth),
+ *  solo lo saneamos para no romper la UI. */
+function cleanDisplayName(name?: string): string | null {
+  const trimmed = name?.trim().replace(/\s+/g, " ").slice(0, 40);
+  return trimmed ? trimmed : null;
 }
 
 function handleCreate(ws: WebSocket, state: ConnState): void {
   const me = identity(state);
-  const room = rooms.create({ npub: me.npub, displayName: me.displayName });
+  const room = rooms.create({ npub: me.npub, displayName: me.displayName, pubkey: me.pubkey });
   attachToRoom(ws, state, room);
   broadcastRoom(room);
 }
@@ -139,7 +200,7 @@ function handleJoin(
   const room = roomId ? rooms.get(roomId) : code ? rooms.getByCode(code) : undefined;
   if (!room) return send(ws, { t: "error", code: "NO_ROOM", message: "Sala inexistente" });
   if (!room.hasPlayer(me.npub))
-    room.join({ npub: me.npub, displayName: me.displayName });
+    room.join({ npub: me.npub, displayName: me.displayName, pubkey: me.pubkey });
   attachToRoom(ws, state, room);
   broadcastRoom(room);
   resync(ws, room);
@@ -229,20 +290,183 @@ function handleAcceptDraw(ws: WebSocket, state: ConnState): void {
   finishMatch(room);
 }
 
-/** Cierre de partida: cancelar timers y avisar el resultado a la sala. */
+// ----------------------------------------------------------------- apuestas NGE
+
+/** El anfitrión propone una apuesta; el escrow emite un invoice por jugador. */
+async function handleProposeBet(ws: WebSocket, state: ConnState, stakeSats: number): Promise<void> {
+  if (!betsEnabled())
+    return send(ws, { t: "error", code: "BETS_DISABLED", message: "Apuestas deshabilitadas" });
+  const room = currentRoom(state);
+  const me = identity(state);
+  if (me.npub !== room.hostNpub)
+    return send(ws, { t: "error", code: "NOT_HOST", message: "Solo el anfitrión propone la apuesta" });
+  if (room.phase !== "lobby")
+    return send(ws, { t: "error", code: "NOT_LOBBY", message: "La partida ya arrancó" });
+  if (betsByRoom.has(room.id))
+    return send(ws, { t: "error", code: "BET_EXISTS", message: "Ya hay una apuesta en curso" });
+  const white = room.white;
+  const black = room.black;
+  if (!white || !black || !room.isFull)
+    return send(ws, { t: "error", code: "NOT_FULL", message: "Falta el rival" });
+  if (!white.pubkey || !black.pubkey)
+    return send(ws, {
+      t: "error",
+      code: "GUEST_IN_ROOM",
+      message: "Ambos jugadores deben entrar con Nostr para apostar",
+    });
+  if (!Number.isInteger(stakeSats) || stakeSats <= 0)
+    return send(ws, { t: "error", code: "BAD_STAKE", message: "Monto inválido" });
+
+  const created = await createBet({
+    clientRef: `bet_${room.id}`,
+    roomId: room.id,
+    stakeSats,
+    seats: [
+      { seatId: "w", pubkey: white.pubkey },
+      { seatId: "b", pubkey: black.pubkey },
+    ],
+    condition: "Gana la partida de ajedrez (empate → reembolso)",
+  });
+
+  betsByRoom.set(room.id, { betId: created.betId, stakeSats: created.stakeSats, started: false });
+
+  // Invoice privado a cada jugador (su asiento por color).
+  for (const dep of created.deposits) {
+    const npub = dep.seatId === "w" ? white.npub : black.npub;
+    for (const sock of socketsOf(room.id, npub))
+      send(sock, {
+        t: "bet_invoice",
+        betId: created.betId,
+        bolt11: dep.bolt11,
+        amountSats: dep.amountSats,
+        stakeSats: created.stakeSats,
+      });
+  }
+
+  broadcast(room, {
+    t: "bet",
+    bet: {
+      betId: created.betId,
+      status: "pending_deposits",
+      stakeSats: created.stakeSats,
+      potSats: created.potSats,
+      seats: [
+        { color: "w", deposited: false },
+        { color: "b", deposited: false },
+      ],
+    },
+  });
+
+  const stop = watchBet(created.betId, (bet) => onBetUpdate(room.id, bet));
+  const record = betsByRoom.get(room.id);
+  if (record) record.stop = stop;
+  else stop(); // la sala se limpió mientras creábamos: cortar el watch
+}
+
+/** Cada transición del escrow: refleja estado, arranca al fondear, cierra al terminar. */
+function onBetUpdate(roomId: string, bet: NgeBet): void {
+  const room = rooms.get(roomId);
+  const record = betsByRoom.get(roomId);
+  if (!room || !record) return;
+  broadcast(room, { t: "bet", bet: betView(bet) });
+
+  if (bet.status === "funded" && !record.started && room.phase === "lobby") {
+    record.started = true;
+    startAndBroadcast(room);
+    return;
+  }
+  if (isTerminalBet(bet.status)) {
+    record.stop?.();
+    betsByRoom.delete(roomId);
+    broadcast(room, { t: "bet_closed", reason: bet.status });
+  }
+}
+
+/** El anfitrión cancela la apuesta pre-fondeo (reembolsa lo ya pagado). */
+async function handleCancelBet(ws: WebSocket, state: ConnState): Promise<void> {
+  const room = currentRoom(state);
+  const me = identity(state);
+  const record = betsByRoom.get(room.id);
+  if (!record) return;
+  if (me.npub !== room.hostNpub)
+    return send(ws, { t: "error", code: "NOT_HOST", message: "Solo el anfitrión cancela" });
+  if (record.started)
+    return send(ws, { t: "error", code: "BET_STARTED", message: "La partida ya arrancó" });
+  await cancelBet(record.betId).catch((err) => console.warn("[bet] cancel falló:", err));
+  clearBet(room, "cancelada");
+}
+
+/** Liquida la apuesta al terminar la partida: ganador por color, empate → reembolso. */
+function settleRoomBet(room: Room, winners: Npub[]): void {
+  const record = betsByRoom.get(room.id);
+  if (!record) return;
+  const winnerSeats: string[] = [];
+  if (winners.length === 1) {
+    const color = room.roster.find((p) => p.npub === winners[0])?.color;
+    if (color) winnerSeats.push(color);
+  }
+  // [] = empate/anulación → el escrow reembolsa. El resultado lo dicta el server.
+  settleBet(record.betId, winnerSeats).catch((err) => console.warn("[bet] settle falló:", err));
+  // El watch emitirá 'settled' y disparará bet_closed + limpieza.
+}
+
+function betView(bet: NgeBet): BetView {
+  return {
+    betId: bet.betId,
+    status: bet.status,
+    stakeSats: bet.stakeSats,
+    potSats: bet.potSats,
+    seats: bet.seats.map((s) => ({ color: (s.seatId === "w" ? "w" : "b") as Color, deposited: s.deposited })),
+  };
+}
+
+function isTerminalBet(status: string): boolean {
+  return ["settled", "cancelled", "expired", "refunded"].includes(status);
+}
+
+/** Corta el watch, olvida la apuesta y avisa a la sala. */
+function clearBet(room: Room, reason: string): void {
+  const record = betsByRoom.get(room.id);
+  if (!record) return;
+  record.stop?.();
+  betsByRoom.delete(room.id);
+  broadcast(room, { t: "bet_closed", reason });
+}
+
+/** Sockets vivos de un jugador en una sala. */
+function socketsOf(roomId: string, npub: Npub): WebSocket[] {
+  const set = roomSockets.get(roomId);
+  if (!set) return [];
+  return [...set].filter((ws) => conns.get(ws)?.identity?.npub === npub);
+}
+
+/** Cierre de partida: cancelar timers, aplicar ELO y avisar el resultado. */
 function finishMatch(room: Room): void {
-  if (!room.match) return;
+  if (!room.match || room.settled) return;
+  room.settled = true;
   room.phase = "finished";
   clearTimeout(clockTimers.get(room.id));
   clockTimers.delete(room.id);
   const timers = abandonTimers.get(room.id);
   if (timers) for (const t of timers.values()) clearTimeout(t);
   abandonTimers.delete(room.id);
+  const winners = room.match.winnerNpubs();
   broadcast(room, {
     t: "ended",
     result: room.match.getResult(),
-    winnerNpubs: room.match.winnerNpubs(),
+    winnerNpubs: winners,
+    ratings: rateMatch(room, winners),
   });
+  settleRoomBet(room, winners);
+}
+
+/** Aplica ELO a los dos jugadores de la sala (o undefined si falta alguno). */
+function rateMatch(room: Room, winners: Npub[]): RatingChange[] | undefined {
+  const white = room.white;
+  const black = room.black;
+  if (!white || !black) return undefined;
+  const winner = winners.length === 1 ? winners[0]! : null;
+  return applyResult(white.npub, black.npub, winner);
 }
 
 // ----------------------------------------------------------------- helpers
@@ -272,6 +496,13 @@ function handleDisconnect(ws: WebSocket): void {
   const me = state.identity;
   if (!room || !me) return;
   if (isOnline(room.id, me.npub)) return; // le queda otra pestaña/socket
+  // En lobby con apuesta sin fondear: cancelar (reembolsa lo ya pagado) para no
+  // dejar fondos atados si un jugador se va antes de arrancar.
+  const record = betsByRoom.get(room.id);
+  if (room.phase === "lobby" && record && !record.started) {
+    cancelBet(record.betId).catch((err) => console.warn("[bet] cancel en disconnect:", err));
+    clearBet(room, "un jugador se fue");
+  }
   // Con partida en curso: gracia para reconectarse; si no vuelve, pierde.
   if (room.phase === "playing" && room.match && !room.match.isOver) {
     broadcast(room, {

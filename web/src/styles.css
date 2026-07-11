@@ -156,6 +156,56 @@ input[readonly] { color: var(--muted); font-family: var(--mono); font-size: 12px
 .login .stack { margin-top: 36px; }
 .login input { text-align: center; }
 .login .fine { margin-top: 28px; }
+.login .stack .fine { margin-top: 0; }
+.challenge-banner {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  z-index: 50; display: flex; align-items: center; gap: 18px;
+  padding: 14px 20px; border-radius: 14px;
+  background: var(--panel, #16181d); border: 1px solid var(--gold);
+  box-shadow: 0 12px 40px rgba(0,0,0,.5); max-width: min(560px, 92vw);
+}
+.challenge-text { color: var(--text, #eee); font-size: 15px; }
+.challenge-actions { display: flex; gap: 10px; margin-left: auto; }
+.challenge-actions button { padding: 8px 16px; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  background: rgba(0,0,0,.6); padding: 24px;
+}
+.modal {
+  position: relative; width: min(440px, 100%);
+  background: var(--panel, #16181d); border: 1px solid var(--line, rgba(255,255,255,.12));
+  border-radius: 16px; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.modal h3 { margin: 0 0 8px; font-size: 22px; }
+.modal-close {
+  position: absolute; top: 14px; right: 14px; width: 32px; height: 32px;
+  padding: 0; border-radius: 8px; line-height: 1;
+}
+.zap-amounts { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+.zap-amounts .zap-amt { flex: 1 1 40%; }
+.zap-invoice-label { color: var(--muted); font-size: 13px; margin: 6px 0; }
+.zap-invoice {
+  width: 100%; font-family: monospace; font-size: 11px; word-break: break-all;
+  resize: none; margin-bottom: 12px;
+}
+.bet-card .fine { margin: 6px 0 0; }
+.bet-seats { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.bet-seat { display: flex; justify-content: space-between; font-size: 14px; }
+.bet-seat .paid { color: #4ade80; font-weight: 600; }
+.bet-seat .unpaid { color: var(--faint); }
+.bet-invoice-box { margin-top: 12px; }
+.result-rating { margin: 14px 0 0; font-size: 15px; color: var(--muted); }
+.result-rating .delta { font-weight: 700; }
+.result-rating .delta.up { color: #4ade80; }
+.result-rating .delta.down { color: #f87171; }
+.login-or {
+  display: flex; align-items: center; gap: 12px;
+  color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 2px;
+  margin: 6px 0;
+}
+.login-or::before, .login-or::after {
+  content: ""; flex: 1; height: 1px; background: var(--line, rgba(255,255,255,.12));
+}
 
 /* ---------------------------------------------------------- home */
 .home { max-width: 760px; margin: 0 auto; padding: 72px 28px 0; }

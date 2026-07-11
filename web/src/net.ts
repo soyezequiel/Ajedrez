@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from "./protocol.js";
+import type { ClientMessage, NostrEvent, ServerMessage } from "./protocol.js";
 
 type Handlers = {
   [M in ServerMessage as M["t"]]?: (msg: M) => void;
@@ -43,6 +43,10 @@ export class Net {
 
   // Atajos
   auth(token: string) { this.send({ t: "auth", token }); }
+  authChallenge() { this.send({ t: "auth_challenge" }); }
+  authNostr(event: NostrEvent, displayName?: string) {
+    this.send({ t: "auth_nostr", event, displayName });
+  }
   createRoom() { this.send({ t: "create_room" }); }
   joinRoom(opts: { roomId?: string; code?: string }) { this.send({ t: "join_room", ...opts }); }
   ready() { this.send({ t: "ready" }); }
@@ -52,4 +56,6 @@ export class Net {
   resign() { this.send({ t: "resign" }); }
   offerDraw() { this.send({ t: "offer_draw" }); }
   acceptDraw() { this.send({ t: "accept_draw" }); }
+  proposeBet(stakeSats: number) { this.send({ t: "propose_bet", stakeSats }); }
+  cancelBet() { this.send({ t: "cancel_bet" }); }
 }

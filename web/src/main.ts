@@ -2,15 +2,55 @@ import "./styles.css";
 import { WS_URL } from "./config.js";
 import { Net } from "./net.js";
 import { createBoard, type BoardController, type BoardKind, type MoveFn } from "./board.js";
+import {
+  forgetNostrLogin,
+  hasStoredNostrLogin,
+  makeSigner,
+  rememberNostrLogin,
+  signAuthChallenge,
+  waitForNostr,
+} from "./nostr/signer.js";
+import { fetchProfile } from "./nostr/relays.js";
+import { publishRating } from "./nostr/score.js";
+import { createPresence, type PresenceController } from "./nostr/presence.js";
+import { sendChallenge, startChallengeInbox, toPubkeyHex } from "./nostr/challenge.js";
+import { publishNote } from "./nostr/social.js";
+import { createZapInvoice } from "./nostr/zap.js";
+import type { NgpSigner, ParsedChallenge } from "nostr-game-protocol/ngp";
 import type {
+  BetView,
   Color,
   MatchSnapshot,
   MovePayload,
+  RatingChange,
+  RoomPlayer,
   RoomView,
   SessionIdentity,
 } from "./protocol.js";
 
 const NAME_KEY = "ajedrez.name.v1";
+
+/** Cómo está autenticado el jugador en esta sesión (para re-auth al reconectar). */
+type LoginMode =
+  | { kind: "guest"; name: string }
+  | { kind: "nostr"; signer: NgpSigner; displayName: string };
+let login: LoginMode | null = null;
+
+/** Controlador de presencia NIP-38 (solo login Nostr). */
+let presence: PresenceController | null = null;
+
+/** Corta la suscripción al inbox de retos NIP-17 (solo Nostr). */
+let inboxStop: (() => void) | null = null;
+
+/** Reto pendiente de enviar: se dispara cuando se crea la sala del retador. */
+let pendingChallenge: { toPubkey: string } | null = null;
+
+/** Presencia activa mientras el jugador está en una sala (solo Nostr). */
+function ensurePresence(): PresenceController | null {
+  if (login?.kind !== "nostr") return null;
+  presence ??= createPresence(login.signer);
+  return presence;
+}
 
 const app = document.getElementById("app")!;
 const net = new Net(WS_URL);
@@ -23,6 +63,14 @@ interface State {
   ready: boolean;
   drawOfferBy: string | null;
   ended: { winnerNpubs: string[]; text: string; sub: string } | null;
+  /** Cambio de rating ELO propio de la última partida (solo login Nostr). */
+  myRating: RatingChange | null;
+  /** ¿El server tiene el escrow de apuestas activo? */
+  betsEnabled: boolean;
+  /** Apuesta en curso de la sala, o null. */
+  bet: BetView | null;
+  /** Invoice de depósito propio (para pagar con billetera). */
+  myBetInvoice: { bolt11: string | null; amountSats: number; stakeSats: number } | null;
   /** Historial de jugadas de ESTA sesión (coordenadas). El servidor solo manda
    *  `lastMove`, así que lo acumulamos localmente; se reinicia al entrar a una sala. */
   history: MovePayload[];
@@ -36,6 +84,10 @@ const state: State = {
   ready: false,
   drawOfferBy: null,
   ended: null,
+  myRating: null,
+  betsEnabled: false,
+  bet: null,
+  myBetInvoice: null,
   history: [],
 };
 
@@ -57,17 +109,107 @@ function pendingJoin(): string | null {
 
 function start(): void {
   wireNet();
+  if (hasStoredNostrLogin()) return void startNostr(true);
   const name = storedName();
   if (!name) return renderLogin();
+  login = { kind: "guest", name };
   renderConnecting();
   net.connect();
   net.auth(name);
 }
 
 function loginWith(name: string): void {
-  sessionStorage.setItem(NAME_KEY, name.trim());
+  const trimmed = name.trim();
+  sessionStorage.setItem(NAME_KEY, trimmed);
+  login = { kind: "guest", name: trimmed };
+  renderConnecting();
   net.connect();
-  net.auth(name.trim());
+  net.auth(trimmed);
+}
+
+/**
+ * Login Nostr (NIP-07): detecta la extensión, obtiene la pubkey (dispara el
+ * permiso), toma el nombre del perfil best-effort y arranca el handshake de
+ * challenge. `auto` = reintento silencioso al recargar con sesión Nostr previa.
+ */
+async function startNostr(auto = false): Promise<void> {
+  renderConnecting();
+  const provider = await waitForNostr(auto ? 4000 : 1500);
+  if (!provider) {
+    forgetNostrLogin();
+    if (!auto) toast("No se detectó extensión Nostr. Probá Alby o nos2x.");
+    return renderLogin();
+  }
+  let displayName = "";
+  try {
+    const pubkey = await provider.getPublicKey();
+    displayName = (await fetchProfile(pubkey)).name ?? "";
+  } catch {
+    forgetNostrLogin();
+    toast("La extensión Nostr no autorizó el acceso.");
+    return renderLogin();
+  }
+  login = { kind: "nostr", signer: makeSigner(provider), displayName };
+  rememberNostrLogin();
+  net.connect();
+  net.authChallenge();
+}
+
+/** Arranca la bandeja de retos NIP-17 (una vez, solo con login Nostr). */
+function startInbox(): void {
+  if (inboxStop || login?.kind !== "nostr") return;
+  const pubkey = state.identity?.pubkey;
+  if (!pubkey) return;
+  inboxStop = startChallengeInbox(login.signer, pubkey, showIncomingChallenge);
+}
+
+/** Si hay un reto pendiente y esta es la sala que creé, lo envío al rival. */
+function maybeSendPendingChallenge(room: RoomView): void {
+  if (!pendingChallenge || login?.kind !== "nostr") return;
+  if (room.hostNpub !== state.identity?.npub) return;
+  const { toPubkey } = pendingChallenge;
+  pendingChallenge = null;
+  const joinUrl = `${location.origin}/?join=${encodeURIComponent(room.id)}`;
+  sendChallenge(login.signer, {
+    toPubkey,
+    roomId: room.id,
+    joinUrl,
+    message: `${state.identity?.displayName ?? "Alguien"} te reta a una partida de ajedrez`,
+  })
+    .then(() => toast("Reto enviado ♟"))
+    .catch(() => toast("No se pudo enviar el reto"));
+}
+
+/** Banner de reto entrante con acción de aceptar. */
+function showIncomingChallenge(c: ParsedChallenge): void {
+  document.getElementById("challenge-banner")?.remove();
+  const el = document.createElement("div");
+  el.id = "challenge-banner";
+  el.className = "challenge-banner";
+  const who = `${c.fromNpub.slice(0, 12)}…`;
+  el.innerHTML = `
+    <span class="challenge-text">♞ <b>${who}</b> te retó a una partida</span>
+    <span class="challenge-actions">
+      <button class="btn-gold" id="challenge-accept">Aceptar</button>
+      <button id="challenge-dismiss">Ignorar</button>
+    </span>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.querySelector("#challenge-dismiss")!.addEventListener("click", close);
+  el.querySelector("#challenge-accept")!.addEventListener("click", () => {
+    close();
+    if (c.roomId) net.joinRoom({ roomId: c.roomId });
+    else toast("El reto no trae sala");
+  });
+}
+
+/** Firma y publica el marcador (rating ELO) tras una partida, si hay login Nostr. */
+function publishMyRating(): void {
+  const change = state.myRating;
+  if (!change || login?.kind !== "nostr") return;
+  publishRating(login.signer, change.rating)
+    .then(() => toast(`Marcador publicado · rating ${change.rating}`))
+    .catch(() => {});
 }
 
 // --------------------------------------------------------------- net
@@ -76,8 +218,22 @@ function wireNet(): void {
   net.on("open", () => {
     reconnectDelay = 1000;
   });
+  net.on("challenge", async (m) => {
+    if (login?.kind !== "nostr") return;
+    try {
+      const event = await signAuthChallenge(login.signer, m.challenge);
+      net.authNostr(event, login.displayName || undefined);
+    } catch {
+      forgetNostrLogin();
+      login = null;
+      state.identity = null;
+      toast("No se pudo firmar el login Nostr.");
+      renderLogin();
+    }
+  });
   net.on("authed", (m) => {
     state.identity = m.identity;
+    startInbox();
     const join = pendingJoin();
     cleanUrl();
     if (state.room) net.joinRoom({ roomId: state.room.id }); // reconexión: volver a la sala
@@ -88,6 +244,7 @@ function wireNet(): void {
     const wasInRoom = state.room !== null;
     state.room = m.room;
     if (m.room.phase === "lobby") { state.ready = false; state.history = []; }
+    maybeSendPendingChallenge(m.room);
     if (!wasInRoom) enterGame();
     else patchGame();
   });
@@ -99,13 +256,32 @@ function wireNet(): void {
     renderBoardFromMatch();
     patchGame();
   });
+  net.on("caps", (m) => {
+    state.betsEnabled = m.bets;
+  });
+  net.on("bet", (m) => {
+    state.bet = m.bet;
+    patchSidePanels();
+  });
+  net.on("bet_invoice", (m) => {
+    state.myBetInvoice = { bolt11: m.bolt11, amountSats: m.amountSats, stakeSats: m.stakeSats };
+    patchSidePanels();
+  });
+  net.on("bet_closed", (m) => {
+    state.bet = null;
+    state.myBetInvoice = null;
+    toast(`Apuesta cerrada: ${m.reason}`);
+    patchSidePanels();
+  });
   net.on("draw_offer", (m) => {
     state.drawOfferBy = m.byNpub;
     patchSidePanels();
   });
   net.on("ended", (m) => {
     state.ended = { winnerNpubs: m.winnerNpubs, ...endedText(m.winnerNpubs, m.result) };
+    state.myRating = m.ratings?.find((r) => r.npub === state.identity?.npub) ?? null;
     if (board) board.setInteractive(false);
+    publishMyRating();
     patchGame();
   });
   net.on("presence", (m) => {
@@ -127,14 +303,19 @@ function wireNet(): void {
       return;
     }
     toast(`${m.code}: ${m.message}`);
+    // Refrescar el lobby resetea botones que quedaron en estado "cargando"
+    // (p. ej. "Creando…" si falló la propuesta de apuesta).
+    if (state.room?.phase === "lobby") patchSidePanels();
   });
   net.on("close", () => {
-    const name = storedName();
-    if (!state.identity || !name) return renderConnError();
+    if (!state.identity || !login) return renderConnError();
     toast("Conexión perdida, reconectando…");
+    const mode = login;
     setTimeout(() => {
       net.connect();
-      net.auth(name);
+      // Invitado: re-auth por nombre (sin fricción). Nostr: re-firmar el reto.
+      if (mode.kind === "guest") net.auth(mode.name);
+      else net.authChallenge();
     }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
   });
@@ -269,17 +450,20 @@ function renderConnError(): void {
 
 function renderLogin(): void {
   app.innerHTML = shell(`
-    <p class="muted">Partidas 1v1 en tiempo real. Entrá con un nombre.</p>
+    <p class="muted">Partidas 1v1 en tiempo real.</p>
     <div class="stack">
+      <button class="btn-gold" id="nostr">Entrar con Nostr</button>
+      <p class="fine">Con tu clave Nostr habilitás marcador, retos, zaps y apuestas.</p>
+      <div class="login-or"><span>o</span></div>
       <input id="name" placeholder="Tu nombre" />
-      <button class="btn-gold" id="go">Entrar a jugar</button>
+      <button id="go">Entrar como invitado</button>
     </div>
-    <p class="fine">Sin cuenta ni registro — solo tu nombre y un rival.</p>`);
+    <p class="fine">Invitado: solo jugás partidas — sin marcador ni apuestas.</p>`);
+  document.getElementById("nostr")!.addEventListener("click", () => void startNostr(false));
   const input = document.getElementById("name") as HTMLInputElement;
   const go = () => input.value.trim() && loginWith(input.value);
   document.getElementById("go")!.addEventListener("click", go);
   input.addEventListener("keydown", (e) => e.key === "Enter" && go());
-  input.focus();
 }
 
 // --------------------------------------------------------------- render: topbar
@@ -297,6 +481,7 @@ function topbar(): string {
 // --------------------------------------------------------------- render: home
 
 function renderHome(): void {
+  void presence?.stop();
   app.innerHTML =
     topbar() +
     `<main class="home">
@@ -318,6 +503,7 @@ function renderHome(): void {
             <button id="join">Entrar</button>
           </div>
         </section>
+        ${challengeCard()}
       </div>
     </main>`;
 
@@ -326,12 +512,49 @@ function renderHome(): void {
     const code = (document.getElementById("code") as HTMLInputElement).value.trim().toUpperCase();
     if (code) net.joinRoom({ code });
   });
+  document.getElementById("challenge-send")?.addEventListener("click", sendChallengeFromHome);
+}
+
+/** Tarjeta de reto por npub — solo para login Nostr (los invitados no tienen clave). */
+function challengeCard(): string {
+  if (state.identity?.guest !== false) return "";
+  return `
+    <section class="card action-card">
+      <span class="glyph">♞</span>
+      <h2 class="card-title">Retar a un amigo</h2>
+      <p class="muted">Pegá el npub de tu rival: le llega un reto cifrado por Nostr.</p>
+      <div class="row">
+        <input id="challenge-npub" placeholder="npub1…" />
+        <button id="challenge-send">Retar</button>
+      </div>
+    </section>`;
+}
+
+/** Crea la sala y deja el reto pendiente; se envía al llegar el `room`. */
+function sendChallengeFromHome(): void {
+  const input = document.getElementById("challenge-npub") as HTMLInputElement | null;
+  const raw = input?.value.trim();
+  if (!raw) return;
+  let toPubkey: string;
+  try {
+    toPubkey = toPubkeyHex(raw);
+  } catch {
+    return toast("npub inválido");
+  }
+  if (toPubkey === state.identity?.pubkey) return toast("No podés retarte a vos mismo");
+  pendingChallenge = { toPubkey };
+  toast("Creando sala…");
+  net.createRoom();
 }
 
 // --------------------------------------------------------------- render: partida
 
 function enterGame(): void {
   state.ended = null;
+  state.myRating = null;
+  state.bet = null;
+  state.myBetInvoice = null;
+  ensurePresence()?.start();
   app.innerHTML =
     topbar() +
     `<main class="game">
@@ -484,9 +707,84 @@ function lobbyPanel(): string {
       <p class="fine">Compartí el link o el código (tu rival tiene que usar OTRO nombre).</p>
     </div>
     <div class="card">${seats}${emptySeat}</div>
+    ${betPanel()}
     <button class="btn-gold" id="ready" ${!full || state.ready ? "disabled" : ""}>
       ${state.ready ? "Esperando al rival…" : full ? "Listo" : "Falta el rival"}
     </button>`;
+}
+
+/** ¿Ambos jugadores entraron con Nostr? (requisito para apostar). */
+function bothNostr(): boolean {
+  const players = state.room?.players ?? [];
+  return players.length >= 2 && players.every((p) => !!p.pubkey);
+}
+
+function amHost(): boolean {
+  return state.room?.hostNpub === state.identity?.npub;
+}
+
+/** Panel de apuesta custodiada (NGE) en el lobby. */
+function betPanel(): string {
+  if (!state.betsEnabled) return "";
+  const bet = state.bet;
+  if (!bet) {
+    if (!bothNostr())
+      return `<div class="card bet-card">
+        <p class="section-label">Apuesta</p>
+        <p class="fine">Ambos deben entrar con Nostr para apostar en la partida.</p>
+      </div>`;
+    if (!amHost())
+      return `<div class="card bet-card">
+        <p class="section-label">Apuesta</p>
+        <p class="fine">El anfitrión puede proponer una apuesta en sats.</p>
+      </div>`;
+    return `<div class="card bet-card">
+      <p class="section-label">Apuesta (opcional)</p>
+      <p class="fine">Pozo custodiado por Lightning. Ganás la partida, ganás el pozo. Empate → reembolso.</p>
+      <div class="row" style="margin-top:10px">
+        <input id="bet-stake" type="number" min="1" placeholder="sats por jugador" />
+        <button id="bet-propose">Proponer</button>
+      </div>
+    </div>`;
+  }
+
+  // Hay apuesta: estado + depósito propio.
+  const mine = state.bet?.seats.find((s) => s.color === myColor());
+  const iPaid = mine?.deposited === true;
+  const seatsHtml = bet.seats
+    .map((s) => {
+      const name = state.room?.players.find((p) => p.color === s.color)?.displayName ?? (s.color === "w" ? "Blancas" : "Negras");
+      return `<div class="bet-seat">
+        <span>${name}</span>
+        <span class="${s.deposited ? "paid" : "unpaid"}">${s.deposited ? "✓ pagó" : "pendiente"}</span>
+      </div>`;
+    })
+    .join("");
+  const inv = state.myBetInvoice;
+  const invoiceHtml =
+    !iPaid && inv?.bolt11
+      ? `<div class="bet-invoice-box">
+          <p class="zap-invoice-label">Pagá ${inv.amountSats} sats para entrar:</p>
+          <textarea class="zap-invoice" readonly rows="3">${inv.bolt11}</textarea>
+          <div class="row">
+            <a class="btn-gold" href="lightning:${inv.bolt11}">Abrir en billetera</a>
+            <button id="bet-copy">Copiar</button>
+          </div>
+        </div>`
+      : iPaid
+        ? `<p class="fine">Ya depositaste. Esperando al rival…</p>`
+        : "";
+  const cancelBtn = amHost()
+    ? `<button class="danger" id="bet-cancel" style="margin-top:12px">Cancelar apuesta</button>`
+    : "";
+  // El escrow reporta potSats real (0 hasta fondear); mostramos el pozo objetivo.
+  const targetPot = bet.stakeSats * bet.seats.length;
+  return `<div class="card bet-card">
+    <p class="section-label">Apuesta · pozo ${targetPot} sats (${bet.stakeSats} c/u)</p>
+    <div class="bet-seats">${seatsHtml}</div>
+    ${invoiceHtml}
+    ${cancelBtn}
+  </div>`;
 }
 
 function playingPanel(): string {
@@ -513,14 +811,47 @@ function endedPanel(): string {
   const e = state.ended!;
   const cls = e.winnerNpubs.length === 0 ? "draw" : me && e.winnerNpubs.includes(me) ? "win" : "lose";
   const crown = cls === "win" ? "♔" : cls === "lose" ? "♚" : "½";
+  const r = state.myRating;
+  const ratingLine = r
+    ? `<p class="result-rating">Rating ${r.rating} ` +
+      `<span class="delta ${r.delta >= 0 ? "up" : "down"}">${r.delta >= 0 ? "+" : ""}${r.delta}</span></p>`
+    : "";
   return `<div class="card result-card ${cls}" style="position:static;padding:28px">
     <div class="crown">${crown}</div>
     <p class="result-title">${e.text}</p>
     <p class="result-sub">${e.sub}</p>
+    ${ratingLine}
     <div class="actions" style="margin-top:22px">
       <button class="btn-gold" id="home">Volver al inicio</button>
+      ${login?.kind === "nostr" ? `<button id="share-achievement">Compartir logro ♟</button>` : ""}
+      ${zapRivalButton()}
     </div>
   </div>`;
+}
+
+/** El otro jugador de la sala (el rival). */
+function rivalPlayer(): RoomPlayer | undefined {
+  const me = state.identity?.npub;
+  return state.room?.players.find((p) => p.npub !== me);
+}
+
+/** Botón de propina al rival — solo si yo entré con Nostr y el rival tiene pubkey. */
+function zapRivalButton(): string {
+  if (login?.kind !== "nostr") return "";
+  const rival = rivalPlayer();
+  if (!rival?.pubkey) return "";
+  return `<button id="zap-rival">⚡ Propina a ${rival.displayName}</button>`;
+}
+
+/** Texto del logro según el resultado, para publicar como kind:1. */
+function achievementText(): string {
+  const e = state.ended;
+  const plies = state.history.length;
+  const jugadas = plies ? ` en ${Math.ceil(plies / 2)} jugadas` : "";
+  const rating = state.myRating ? ` Mi rating: ${state.myRating.rating}.` : "";
+  const won = e && state.identity && e.winnerNpubs.includes(state.identity.npub);
+  const head = e?.winnerNpubs.length === 0 ? `Empaté una partida de ajedrez${jugadas}` : won ? `Gané una partida de ajedrez${jugadas} ♟` : `Jugué una partida de ajedrez${jugadas}`;
+  return `${head}.${rating} #ajedrez`;
 }
 
 function wireSidePanels(): void {
@@ -530,10 +861,87 @@ function wireSidePanels(): void {
     if (el) navigator.clipboard.writeText(el.value).then(() => toast("Link copiado"));
   });
   on("ready", () => { state.ready = true; net.ready(); patchSidePanels(); });
+  on("bet-propose", () => {
+    const input = document.getElementById("bet-stake") as HTMLInputElement | null;
+    const stake = Number(input?.value);
+    if (!Number.isInteger(stake) || stake <= 0) return toast("Ingresá un monto válido en sats");
+    const btn = document.getElementById("bet-propose") as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.textContent = "Creando…"; }
+    net.proposeBet(stake);
+  });
+  on("bet-cancel", () => net.cancelBet());
+  on("bet-copy", () => {
+    const inv = state.myBetInvoice?.bolt11;
+    if (inv) navigator.clipboard.writeText(inv).then(() => toast("Invoice copiado"));
+  });
   on("resign", () => net.resign());
   on("offer-draw", () => { net.offerDraw(); toast("Tablas ofrecidas"); });
   on("accept-draw", () => net.acceptDraw());
   on("home", () => location.reload());
+  on("share-achievement", () => {
+    if (login?.kind !== "nostr") return;
+    const btn = document.getElementById("share-achievement") as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.textContent = "Publicando…"; }
+    publishNote(login.signer, achievementText())
+      .then(() => toast("Logro publicado en Nostr ♟"))
+      .catch(() => toast("No se pudo publicar"))
+      .finally(() => { if (btn) { btn.textContent = "Compartido ✓"; } });
+  });
+  on("zap-rival", () => {
+    const rival = rivalPlayer();
+    if (rival?.pubkey) openZapDialog(rival.pubkey, rival.displayName);
+  });
+}
+
+// --------------------------------------------------------------- zaps (propinas)
+
+/** Modal de propina: elegís monto y se genera un invoice para pagar con billetera. */
+function openZapDialog(pubkey: string, name: string): void {
+  if (login?.kind !== "nostr") return;
+  const signer = login.signer;
+  document.getElementById("zap-modal")?.remove();
+  const el = document.createElement("div");
+  el.id = "zap-modal";
+  el.className = "modal-overlay";
+  el.innerHTML = `
+    <div class="modal">
+      <button class="modal-close" id="zap-close">✕</button>
+      <h3>⚡ Propina a ${name}</h3>
+      <p class="muted">Elegí un monto. Se genera un invoice que pagás con tu billetera Lightning.</p>
+      <div class="zap-amounts">
+        ${[21, 100, 500, 1000].map((a) => `<button class="zap-amt" data-sats="${a}">${a} sats</button>`).join("")}
+      </div>
+      <div id="zap-result"></div>
+    </div>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.addEventListener("click", (e) => { if (e.target === el) close(); });
+  el.querySelector("#zap-close")!.addEventListener("click", close);
+  el.querySelectorAll<HTMLElement>(".zap-amt").forEach((b) =>
+    b.addEventListener("click", () => requestZap(signer, pubkey, name, Number(b.dataset.sats))),
+  );
+}
+
+function requestZap(signer: NgpSigner, pubkey: string, name: string, sats: number): void {
+  const box = document.getElementById("zap-result");
+  if (box) box.innerHTML = `<p class="muted">Generando invoice…</p>`;
+  createZapInvoice(signer, pubkey, sats, `Propina de ajedrez para ${name}`)
+    .then((inv) => {
+      if (!box) return;
+      box.innerHTML = `
+        <p class="zap-invoice-label">${inv.amountSats} sats · pagá con tu billetera</p>
+        <textarea class="zap-invoice" readonly rows="3">${inv.bolt11}</textarea>
+        <div class="row">
+          <a class="btn-gold" href="lightning:${inv.bolt11}">Abrir en billetera</a>
+          <button id="zap-copy">Copiar</button>
+        </div>`;
+      document.getElementById("zap-copy")?.addEventListener("click", () =>
+        navigator.clipboard.writeText(inv.bolt11).then(() => toast("Invoice copiado")),
+      );
+    })
+    .catch((err: unknown) => {
+      if (box) box.innerHTML = `<p class="status check">${err instanceof Error ? err.message : "Error"}</p>`;
+    });
 }
 
 // --------------------------------------------------------------- reloj + toast

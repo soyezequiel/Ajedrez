@@ -9,6 +9,16 @@ export interface RoomPlayer {
   npub: Npub;
   displayName: string;
   color: "w" | "b" | null;
+  /** Pubkey hex, presente solo si el jugador entró con Nostr. Habilita el
+   *  payout NGE y la atestación por color. */
+  pubkey?: string;
+}
+
+/** Alta de un jugador en una sala. */
+export interface PlayerInit {
+  npub: Npub;
+  displayName: string;
+  pubkey?: string;
 }
 
 /** Una sala = un emparejamiento 1v1 de ajedrez. */
@@ -19,19 +29,23 @@ export class Room {
 
   phase: RoomPhase = "lobby";
   match: ChessMatch | null = null;
+  /** true una vez liquidada la partida (ELO aplicado). Evita doble conteo si
+   *  `finishMatch` reentra. */
+  settled = false;
 
   /** Asiento por color. Host = blancas por defecto. */
   private readonly players = new Map<Npub, RoomPlayer>();
   /** Oferta de tablas pendiente del npub que la ofreció. */
   drawOfferBy: Npub | null = null;
 
-  constructor(host: { npub: Npub; displayName: string }) {
+  constructor(host: PlayerInit) {
     this.id = `room_${randomBytes(6).toString("hex")}`;
     this.code = makeCode();
     this.hostNpub = host.npub;
     this.players.set(host.npub, {
       npub: host.npub,
       displayName: host.displayName,
+      pubkey: host.pubkey,
       color: "w",
     });
   }
@@ -49,13 +63,14 @@ export class Room {
   }
 
   /** Sienta a un segundo jugador (negras). Idempotente para el mismo npub. */
-  join(player: { npub: Npub; displayName: string }): RoomPlayer {
+  join(player: PlayerInit): RoomPlayer {
     const existing = this.players.get(player.npub);
     if (existing) return existing;
     if (this.isFull) throw new RoomError("ROOM_FULL", "La sala está completa");
     const seat: RoomPlayer = {
       npub: player.npub,
       displayName: player.displayName,
+      pubkey: player.pubkey,
       color: "b",
     };
     this.players.set(player.npub, seat);
@@ -93,7 +108,7 @@ export class RoomManager {
   private readonly byId = new Map<string, Room>();
   private readonly byCode = new Map<string, string>(); // code -> roomId
 
-  create(host: { npub: Npub; displayName: string }): Room {
+  create(host: PlayerInit): Room {
     const room = new Room(host);
     this.byId.set(room.id, room);
     this.byCode.set(room.code, room.id);

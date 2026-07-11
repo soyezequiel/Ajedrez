@@ -31,6 +31,34 @@ export interface MatchSnapshot {
 export interface SessionIdentity {
   npub: string;
   displayName: string;
+  guest: boolean;
+  /** Pubkey hex, presente solo en login Nostr. */
+  pubkey?: string;
+}
+
+/** Evento Nostr firmado (subset de nostr-tools; evita acoplar el tipo entero). */
+export interface NostrEvent {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
+
+export interface RatingChange {
+  npub: string;
+  rating: number;
+  delta: number;
+}
+
+export interface BetView {
+  betId: string;
+  status: string;
+  stakeSats: number;
+  potSats: number;
+  seats: { color: Color; deposited: boolean }[];
 }
 
 export type RoomPhase = "lobby" | "playing" | "finished";
@@ -39,6 +67,8 @@ export interface RoomPlayer {
   npub: string;
   displayName: string;
   color: Color | null;
+  /** Pubkey hex, presente solo si el jugador entró con Nostr (para zaps/retos). */
+  pubkey?: string;
 }
 
 export interface RoomView {
@@ -51,6 +81,8 @@ export interface RoomView {
 
 export type ClientMessage =
   | { t: "auth"; token: string }
+  | { t: "auth_challenge" }
+  | { t: "auth_nostr"; event: NostrEvent; displayName?: string }
   | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
   | { t: "ready" }
@@ -58,14 +90,21 @@ export type ClientMessage =
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
+  | { t: "propose_bet"; stakeSats: number }
+  | { t: "cancel_bet" }
   | { t: "leave" };
 
 export type ServerMessage =
   | { t: "authed"; identity: SessionIdentity }
+  | { t: "caps"; bets: boolean }
+  | { t: "challenge"; challenge: string }
   | { t: "error"; code: string; message: string }
+  | { t: "bet"; bet: BetView }
+  | { t: "bet_invoice"; betId: string; bolt11: string | null; amountSats: number; stakeSats: number }
+  | { t: "bet_closed"; reason: string }
   | { t: "room"; room: RoomView }
   | { t: "match"; snapshot: MatchSnapshot }
   | { t: "draw_offer"; byNpub: string }
-  | { t: "ended"; result: MatchResult; winnerNpubs: string[] }
+  | { t: "ended"; result: MatchResult; winnerNpubs: string[]; ratings?: RatingChange[] }
   /** Un jugador se desconectó (online=false, con gracia para volver) o volvió. */
   | { t: "presence"; npub: string; online: boolean; graceMs?: number };
