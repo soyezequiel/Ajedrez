@@ -13,8 +13,8 @@ export interface BoardController {
 }
 
 const PIECE_CODES = ["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"];
-const SELECT_FILL = "rgba(255, 213, 79, 0.55)";
-const HINT_FILL = "rgba(60, 64, 72, 0.30)";
+const SELECT_FILL = "rgba(201, 164, 92, 0.55)";
+const HINT_FILL = "rgba(201, 164, 92, 0.30)";
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((res, rej) => {
