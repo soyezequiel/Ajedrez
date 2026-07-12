@@ -91,7 +91,9 @@ let pendingChallenge: { toPubkey: string } | null = null;
  *  180s la vence solo. */
 function ensurePresence(): PresenceController | null {
   if (login?.kind !== "nostr") return null;
-  presence ??= createPresence(login.signer);
+  // La pubkey llavea el throttle persistido del manager (no heredar presencia
+  // de otra cuenta); en `authed` la identidad ya está seteada.
+  presence ??= createPresence(login.signer, state.identity?.pubkey);
   return presence;
 }
 
