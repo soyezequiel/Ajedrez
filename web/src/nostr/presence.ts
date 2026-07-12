@@ -57,7 +57,7 @@ export function createPresence(signer: NgpSigner): PresenceController {
       // que la pise). Se re-genera en cada beat, así siempre matchea la más nueva.
       try {
         preparedClear = await signer.signEvent(
-          buildPresenceClearTemplate({ createdAt: event.created_at + 1 }),
+          buildPresenceClearTemplate({ createdAt: event.created_at + 1, gameCoord: GAME_COORD }),
         );
       } catch {
         // Si falla, dejamos el clear previo (best-effort): peor caso, no pisa y la
@@ -88,7 +88,9 @@ export function createPresence(signer: NgpSigner): PresenceController {
       try {
         // Con tiempo (volver al home / logout) firmamos uno fresco si no había
         // pre-firmado; en el cierre de pestaña usamos `clearNow` (sincrónico).
-        await publishToWrite(clear ?? (await buildPresenceClearEvent(signer)));
+        await publishToWrite(
+          clear ?? (await buildPresenceClearEvent(signer, { gameCoord: GAME_COORD })),
+        );
       } catch {
         // Best-effort.
       }
