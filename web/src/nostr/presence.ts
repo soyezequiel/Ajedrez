@@ -37,6 +37,11 @@ export function createPresence(signer: NgpSigner, pubkey?: string): PresenceCont
     signer,
     gameCoord: GAME_COORD,
     pubkey,
+    // Red de seguridad si el clear de cierre no llegó: acotamos el fantasma a 120s
+    // (default del SDK 180). OJO: de fondo el navegador estrangula el heartbeat a
+    // ~1/min, así que 120s tolera UN latido perdido; si aparece flicker mirando la
+    // tienda con el juego abierto, subir a 150/180.
+    ttlSec: 120,
     // Publicación ESTRICTA (rechaza si ningún relay aceptó), no la publishToWrite
     // que traga errores: el manager solo cuenta como "publicado" (throttle, estado
     // persistido) lo que de verdad salió.

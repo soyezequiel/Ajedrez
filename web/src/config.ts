@@ -42,5 +42,13 @@ export const RELAYS = {
     "wss://relay.primal.net",
     "wss://relay.snort.social",
   ],
-  write: ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net"],
+  // Incluye relay.lacrypta.ar (que Luna Negra LEE) para que el clear de cierre
+  // aterrice también ahí: un target más reduce la chance de que un relay se quede
+  // con el "on" viejo si su socket estaba reconectando en el `pagehide`.
+  write: [
+    "wss://relay.lacrypta.ar",
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+  ],
 } as const;
