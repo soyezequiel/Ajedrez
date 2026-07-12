@@ -150,6 +150,8 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
       return handleOfferDraw(ws, state);
     case "accept_draw":
       return handleAcceptDraw(ws, state);
+    case "decline_draw":
+      return handleDeclineDraw(ws, state);
     case "rematch":
       return handleRematch(ws, state);
     case "propose_bet":
@@ -348,6 +350,9 @@ function handleMove(ws: WebSocket, state: ConnState, move: MovePayload): void {
   if (!room.match) return send(ws, { t: "error", code: "NO_MATCH", message: "No hay partida" });
   room.touch();
   const snapshot = room.match.move(identity(state).npub, move);
+  // Una jugada invalida la oferta de tablas pendiente (si no, un F5 posterior
+  // la resucitaba en el resync).
+  room.drawOfferBy = null;
   broadcast(room, { t: "match", snapshot });
   if (room.match.isOver) finishMatch(room);
   else scheduleClock(room);
@@ -375,6 +380,15 @@ function handleAcceptDraw(ws: WebSocket, state: ConnState): void {
   const snapshot = room.match.agreeDraw();
   broadcast(room, { t: "match", snapshot });
   finishMatch(room);
+}
+
+/** Rechaza la oferta de tablas del rival (le llega el aviso a toda la sala). */
+function handleDeclineDraw(ws: WebSocket, state: ConnState): void {
+  const room = currentRoom(state);
+  const me = identity(state).npub;
+  if (!room.drawOfferBy || room.drawOfferBy === me) return;
+  room.drawOfferBy = null;
+  broadcast(room, { t: "draw_offer", byNpub: null });
 }
 
 /** Revancha: cada jugador la pide; con ambos pedidos la sala se reinicia con

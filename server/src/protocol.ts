@@ -53,6 +53,8 @@ export type ClientMessage =
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
+  /** Rechaza la oferta de tablas pendiente del rival. */
+  | { t: "decline_draw" }
   /** Pide revancha tras `finished`; con el pedido de ambos arranca la nueva
    *  partida (colores invertidos, sin apuesta). */
   | { t: "rematch" }
@@ -82,7 +84,8 @@ export type ServerMessage =
   | { t: "bet_closed"; reason: string }
   | { t: "room"; room: RoomView }
   | { t: "match"; snapshot: MatchSnapshot }
-  | { t: "draw_offer"; byNpub: string }
+  /** Oferta de tablas pendiente; `null` = fue rechazada/retirada. */
+  | { t: "draw_offer"; byNpub: string | null }
   /** Un jugador pidió revancha (el otro la acepta mandando su propio `rematch`). */
   | { t: "rematch_offer"; byNpub: string }
   | { t: "ended"; result: MatchResult; winnerNpubs: string[]; ratings?: RatingChange[] }

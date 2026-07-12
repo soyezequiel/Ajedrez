@@ -157,9 +157,14 @@ function pendingJoin(): string | null {
 
 function start(): void {
   startVersionGuard(toast); // recarga sola si el server anuncia un build nuevo
-  // "Salir" (delegado: la topbar se re-renderiza en cada pantalla).
+  // "Salir" (delegado: la topbar se re-renderiza en cada pantalla). En plena
+  // partida pide confirmación: salir implica abandonar.
   document.addEventListener("click", (e) => {
-    if ((e.target as HTMLElement).closest?.("[data-action=logout]")) logout();
+    const btn = (e.target as HTMLElement).closest?.("[data-action=logout]") as HTMLButtonElement | null;
+    if (!btn) return;
+    const inGame = state.room?.phase === "playing" && !state.ended;
+    if (inGame) armButton(btn, "¿Salir y abandonar?", logout);
+    else logout();
   });
   wireNet();
   // Con token: sesión inmediata sin depender del firmador (se restaura de fondo).
@@ -559,6 +564,9 @@ function wireNet(): void {
     patchSidePanels();
   });
   net.on("draw_offer", (m) => {
+    // null = rechazada/retirada; avisar solo al que la había ofrecido.
+    if (m.byNpub === null && state.drawOfferBy === state.identity?.npub)
+      toast("El rival rechazó las tablas");
     state.drawOfferBy = m.byNpub;
     patchSidePanels();
   });
@@ -607,7 +615,7 @@ function wireNet(): void {
       renderHome();
       return;
     }
-    toast(`${m.code}: ${m.message}`);
+    toast(errorText(m.code));
     // Refrescar el lobby resetea botones que quedaron en estado "cargando"
     // (p. ej. "Creando…" si falló la propuesta de apuesta).
     if (state.room?.phase === "lobby") patchSidePanels();
@@ -1237,15 +1245,20 @@ function betPanel(): string {
 }
 
 function playingPanel(): string {
-  const drawIncoming = state.drawOfferBy && state.drawOfferBy !== state.identity?.npub;
+  const me = state.identity?.npub;
+  const offer = state.drawOfferBy;
   const m = state.match;
   const status =
     m?.inCheck && m.result.kind === "ongoing"
       ? `<p class="status check">¡Jaque!</p>`
       : `<p class="status muted">${m?.turn === myColor() ? "Tu turno" : "Turno del rival"}</p>`;
-  const drawBtn = drawIncoming
-    ? `<button id="accept-draw" class="btn-gold">Aceptar tablas</button>`
-    : `<button id="offer-draw">½ Ofrecer tablas</button>`;
+  const drawBtn =
+    offer && offer !== me
+      ? `<button id="accept-draw" class="btn-gold">Aceptar tablas</button>
+         <button id="decline-draw">Rechazar</button>`
+      : offer && offer === me
+        ? `<button disabled>Tablas ofrecidas — esperando respuesta…</button>`
+        : `<button id="offer-draw">½ Ofrecer tablas</button>`;
   return `<div class="card">
     ${status}
     <div class="actions" style="margin-top:12px">
@@ -1253,6 +1266,27 @@ function playingPanel(): string {
       <button class="danger" id="resign">Abandonar</button>
     </div>
   </div>`;
+}
+
+/**
+ * Confirmación inline para acciones destructivas: el primer clic arma el botón
+ * (cambia el texto), el segundo dentro de la ventana ejecuta. Sin modales.
+ */
+function armButton(btn: HTMLButtonElement, armedText: string, fn: () => void): void {
+  if (btn.dataset.armed === "1") {
+    btn.dataset.armed = "";
+    fn();
+    return;
+  }
+  const original = btn.textContent ?? "";
+  btn.dataset.armed = "1";
+  btn.textContent = armedText;
+  setTimeout(() => {
+    if (btn.isConnected && btn.dataset.armed === "1") {
+      btn.dataset.armed = "";
+      btn.textContent = original;
+    }
+  }, 4000);
 }
 
 function endedPanel(): string {
@@ -1333,9 +1367,13 @@ function wireSidePanels(): void {
     const inv = state.myBetInvoice?.bolt11;
     if (inv) navigator.clipboard.writeText(inv).then(() => toast("Invoice copiado"));
   });
-  on("resign", () => net.resign());
-  on("offer-draw", () => { net.offerDraw(); toast("Tablas ofrecidas"); });
+  on("resign", () => {
+    const btn = document.getElementById("resign") as HTMLButtonElement | null;
+    if (btn) armButton(btn, "¿Confirmar abandono?", () => net.resign());
+  });
+  on("offer-draw", () => net.offerDraw()); // el broadcast actualiza el panel
   on("accept-draw", () => net.acceptDraw());
+  on("decline-draw", () => net.declineDraw());
   on("home", () => { clearSavedRoom(); location.reload(); });
   on("rematch", () => {
     state.rematchRequested = true;
@@ -1426,6 +1464,42 @@ setInterval(() => {
     renderPlayers();
   }
 }, 1000);
+
+/** Errores del server traducidos para humanos (el código crudo va de fallback). */
+const ERROR_TEXT: Record<string, string> = {
+  UNAUTHED: "La sesión se perdió — iniciá sesión de nuevo",
+  INVALID_TOKEN: "Ese nombre no es válido",
+  BAD_ROOM_ID: "El link de la sala no es válido",
+  ROOM_FULL:
+    "La sala ya está completa. ¿Usaste el mismo nombre que otro jugador? Cada jugador necesita un nombre distinto.",
+  NOT_READY: "Falta el rival para empezar",
+  NOT_FULL: "Falta el rival para empezar",
+  NOT_FINISHED: "La partida todavía no terminó",
+  NO_MATCH: "No hay partida en curso",
+  MATCH_OVER: "La partida ya terminó",
+  NOT_A_PLAYER: "No estás jugando esta partida",
+  NOT_YOUR_TURN: "No es tu turno",
+  ILLEGAL_MOVE: "Esa jugada no es legal",
+  BETS_DISABLED: "Las apuestas están deshabilitadas en este servidor",
+  NOT_HOST: "Solo el anfitrión puede hacer eso",
+  NOT_LOBBY: "La partida ya arrancó",
+  BET_EXISTS: "Ya hay una apuesta en curso",
+  BET_STARTED: "La partida ya arrancó — la apuesta no se puede cancelar",
+  GUEST_IN_ROOM: "Ambos jugadores deben entrar con Nostr para apostar",
+  BAD_STAKE: "Monto de apuesta inválido",
+  NO_CHALLENGE: "Falló el login Nostr — probá de nuevo",
+  BAD_EVENT: "Falló el login Nostr — probá de nuevo",
+  BAD_KIND: "Falló el login Nostr — probá de nuevo",
+  CHALLENGE_MISMATCH: "Falló el login Nostr — probá de nuevo",
+  STALE_AUTH: "Falló el login Nostr — probá de nuevo",
+  BAD_SIG: "La firma Nostr no es válida",
+  BAD_JSON: "Algo salió mal en la conexión",
+  INTERNAL: "Algo salió mal en el servidor",
+};
+
+function errorText(code: string): string {
+  return ERROR_TEXT[code] ?? `Algo salió mal (${code})`;
+}
 
 const RECONNECT_BANNER_ID = "reconnect-banner";
 
