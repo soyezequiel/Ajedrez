@@ -384,6 +384,15 @@ canvas#board,
 .result-card .result-sub { color: var(--muted); font-size: 14px; margin: 6px 0 0; }
 .result-card .actions { margin-top: 26px; }
 
+/* ------------------------------------------------- selector de promoción */
+.promo-choices { display: flex; gap: 12px; justify-content: center; margin-top: 14px; }
+.promo-btn {
+  padding: 8px; border-radius: 10px; line-height: 0;
+  background: var(--panel-2); border: 1px solid var(--line-2); cursor: pointer;
+}
+.promo-btn:hover { border-color: var(--gold); }
+.promo-btn img { width: 56px; height: 56px; }
+
 /* ------------------------------------------------- banner de reconexión */
 .reconnect-banner {
   position: fixed; top: 0; left: 0; right: 0;

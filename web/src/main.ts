@@ -1043,11 +1043,76 @@ function enterGame(): void {
       </div>
       <aside class="side" id="side"></aside>
     </main>`;
-  const onMove: MoveFn = (from, to, promo) =>
+  const onMove: MoveFn = (from, to, promo) => {
+    // Peón coronando sin pieza elegida (ni el canvas ni Vexel la eligen): abrir
+    // el selector antes de mandar la jugada. El server valida igual.
+    if (!promo && isPromotionMove(from, to)) {
+      openPromotionDialog(myColor() ?? "w", (piece) => net.move(from, to, piece));
+      return;
+    }
     net.move(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n"));
+  };
   board = createBoard(document.getElementById("board-wrap")!, onMove, boardKind());
   renderBoardFromMatch();
   patchGame();
+}
+
+/** ¿La jugada es un peón llegando a la última fila? (mirando el FEN actual). */
+function isPromotionMove(from: string, to: string): boolean {
+  const fen = state.match?.fen;
+  if (!fen) return false;
+  const piece = fenPieceAt(fen, from);
+  return (piece === "P" && to[1] === "8") || (piece === "p" && to[1] === "1");
+}
+
+/** Pieza en una casilla según el FEN ('P' blanca, 'p' negra…), o null si vacía. */
+function fenPieceAt(fen: string, square: string): string | null {
+  const ranks = (fen.split(" ")[0] ?? "").split("/");
+  const file = square.charCodeAt(0) - 97;
+  const row = ranks[8 - Number(square[1])];
+  if (!row || file < 0 || file > 7) return null;
+  let col = 0;
+  for (const ch of row) {
+    if (ch >= "1" && ch <= "8") {
+      col += Number(ch);
+      if (col > file) return null; // la casilla cae en el hueco
+    } else {
+      if (col === file) return ch;
+      col++;
+    }
+  }
+  return null;
+}
+
+/** Modal para elegir la pieza de coronación. Cerrar sin elegir cancela la jugada. */
+function openPromotionDialog(color: Color, choose: (p: "q" | "r" | "b" | "n") => void): void {
+  document.getElementById("promo-modal")?.remove();
+  const el = document.createElement("div");
+  el.id = "promo-modal";
+  el.className = "modal-overlay";
+  const pieces: Array<["q" | "r" | "b" | "n", string]> = [["q", "Q"], ["r", "R"], ["b", "B"], ["n", "N"]];
+  el.innerHTML = `
+    <div class="modal">
+      <h3>Coronar peón</h3>
+      <div class="promo-choices">
+        ${pieces
+          .map(
+            ([p, code]) =>
+              `<button class="promo-btn" data-promo="${p}"><img src="/textures/pieces/${color}${code}.png" alt="${p}" /></button>`,
+          )
+          .join("")}
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+  el.addEventListener("click", (e) => {
+    if (e.target === el) el.remove(); // clic afuera = cancelar
+  });
+  el.querySelectorAll<HTMLElement>(".promo-btn").forEach((b) =>
+    b.addEventListener("click", () => {
+      el.remove();
+      choose(b.dataset.promo as "q" | "r" | "b" | "n");
+    }),
+  );
 }
 
 function renderBoardFromMatch(): void {
@@ -1106,7 +1171,7 @@ function playerBarInner(p: { npub: string; displayName: string; color: Color | n
       <span class="player-name">${p.displayName}${tag}</span>
       <span class="captured">${captured}</span>
     </div>
-    <span class="clock${isTurn ? " is-active" : ""}">${ms === undefined || !p.color ? "--:--" : fmtClock(ms, p.color)}</span>`;
+    <span class="clock${isTurn ? " is-active" : ""}"${p.color ? ` data-clock="${p.color}"` : ""}>${ms === undefined || !p.color ? "--:--" : fmtClock(ms, p.color)}</span>`;
 }
 
 // -- panel lateral por fase --
@@ -1484,9 +1549,14 @@ function fmtClock(baseMs: number, color: Color): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+// Tic del reloj: actualiza SOLO el texto de los relojes (nada de reconstruir las
+// barras enteras cada segundo — flickeaba y reparseaba las piezas capturadas).
 setInterval(() => {
-  if (state.room?.phase === "playing" && state.match?.result.kind === "ongoing") {
-    renderPlayers();
+  const m = state.match;
+  if (state.room?.phase !== "playing" || m?.result.kind !== "ongoing") return;
+  for (const el of document.querySelectorAll<HTMLElement>("[data-clock]")) {
+    const color = el.dataset.clock as Color;
+    el.textContent = fmtClock(color === "w" ? m.whiteClockMs : m.blackClockMs, color);
   }
 }, 1000);
 
