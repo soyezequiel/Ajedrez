@@ -27,6 +27,7 @@ import { createZapInvoice } from "./nostr/zap.js";
 // MODO DE PRUEBA (panel diag `?ngptest=1`) — remover con nostr/diag.ts.
 import { isNgpTestMode, mountDiagPanel } from "./nostr/diag.js";
 import { startVersionGuard } from "./version.js";
+import { playSound, setSoundEnabled, soundEnabled, type SoundName } from "./sound.js";
 import type { NgpSigner, ParsedChallenge } from "nostr-game-protocol/ngp";
 import type {
   BetView,
@@ -155,7 +156,15 @@ function start(): void {
   // "Salir" (delegado: la topbar se re-renderiza en cada pantalla). En plena
   // partida pide confirmación: salir implica abandonar.
   document.addEventListener("click", (e) => {
-    const btn = (e.target as HTMLElement).closest?.("[data-action=logout]") as HTMLButtonElement | null;
+    const target = e.target as HTMLElement;
+    const soundBtn = target.closest?.("[data-action=sound]") as HTMLButtonElement | null;
+    if (soundBtn) {
+      setSoundEnabled(!soundEnabled());
+      soundBtn.textContent = soundEnabled() ? "🔊" : "🔇";
+      if (soundEnabled()) playSound("move"); // feedback inmediato
+      return;
+    }
+    const btn = target.closest?.("[data-action=logout]") as HTMLButtonElement | null;
     if (!btn) return;
     const inGame = state.room?.phase === "playing" && !state.ended;
     if (inGame) armButton(btn, "¿Salir y abandonar?", logout);
@@ -533,6 +542,8 @@ function wireNet(): void {
     else patchGame();
   });
   net.on("match", (m) => {
+    const sound = soundForSnapshot(state.match, m.snapshot);
+    if (sound) playSound(sound);
     state.match = m.snapshot;
     state.matchReceivedAt = Date.now();
     state.drawOfferBy = null;
@@ -640,6 +651,29 @@ function cleanUrl(): void {
   url.searchParams.delete("join");
   url.searchParams.delete("lnOrigin"); // param informativo de la tienda (Room Link)
   history.replaceState(null, "", url.toString());
+}
+
+/**
+ * Qué sonido corresponde a un snapshot nuevo. Silencio en los resyncs (F5 /
+ * reconexión a mitad de partida): solo suena lo que acaba de pasar de verdad.
+ */
+function soundForSnapshot(prev: MatchSnapshot | null, next: MatchSnapshot): SoundName | null {
+  if (next.result.kind !== "ongoing")
+    return prev && prev.matchId === next.matchId && prev.result.kind === "ongoing" ? "end" : null;
+  if (!prev || prev.matchId !== next.matchId)
+    return next.sanHistory.length === 0 ? "start" : null; // partida nueva vs resync
+  if (next.sanHistory.length === prev.sanHistory.length) return null; // sin jugada nueva
+  if (next.inCheck) return "check";
+  if (countPieces(next.fen) < countPieces(prev.fen)) return "capture";
+  return "move";
+}
+
+/** Cantidad de piezas en el FEN (para detectar capturas sin datos extra). */
+function countPieces(fen: string): number {
+  const placement = fen.split(" ")[0] ?? "";
+  let n = 0;
+  for (const ch of placement) if (/[a-z]/i.test(ch)) n++;
+  return n;
 }
 
 // --------------------------------------------------------------- helpers de identidad
@@ -909,10 +943,12 @@ function showGeneratedKey(): void {
 
 function topbar(): string {
   const id = state.identity;
+  const soundBtn = `<button class="logout" data-action="sound" title="Sonido">${soundEnabled() ? "🔊" : "🔇"}</button>`;
   return `
     <header class="topbar">
       <span class="brand"><span class="mark">♞</span>Ajedrez</span>
       <span class="spacer"></span>
+      ${soundBtn}
       ${id ? `<span class="me"><span class="avatar">${initials(id.displayName)}</span>${id.displayName}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
     </header>`;
 }
