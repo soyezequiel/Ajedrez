@@ -33,6 +33,16 @@ export const config = {
   /** Gracia para reconectarse tras una desconexión antes de perder por abandono. */
   abandonGraceMs: Number(process.env.ABANDON_GRACE_MS ?? 60 * 1000),
 
+  /** GC de salas: cada cuánto barrer, y TTL de inactividad según fase. Las salas
+   *  viven en RAM; sin esto crecen sin límite en un server de larga vida. */
+  roomSweepMs: Number(process.env.ROOM_SWEEP_MS ?? 60 * 1000),
+  finishedRoomTtlMs: Number(process.env.ROOM_TTL_FINISHED_MS ?? 10 * 60 * 1000),
+  emptyRoomTtlMs: Number(process.env.ROOM_TTL_EMPTY_MS ?? 30 * 60 * 1000),
+
+  /** Store de apuestas NGE activas (JSON en disco, mismo volumen que ratings).
+   *  Permite reembolsar apuestas huérfanas si el server se reinicia con una viva. */
+  betsPath: process.env.BETS_PATH ?? join(here, "..", "data", "bets.json"),
+
   /** MODO DE PRUEBA (panel diag): coordenada canónica del juego (kind:30023), igual
    *  que web/src/config.ts. Ancla la atestación kind:31338 del oráculo. Remover con
    *  attest.ts si se saca el modo de prueba. */

@@ -17,6 +17,7 @@ import {
 } from "./nostrAuth.js";
 import { applyResult, type RatingChange } from "./ratings.js";
 import { BetError, betsEnabled, cancelBet, createBet, settleBet, watchBet } from "./bets.js";
+import { pendingBets, trackBet, untrackBet } from "./betStore.js";
 // MODO DE PRUEBA (panel diag) — remover junto con attest.ts.
 import { buildTestAttestation, oracleEnabled } from "./attest.js";
 import type { NgeBet } from "nostr-game-protocol/nge";
@@ -340,6 +341,7 @@ function scheduleClock(room: Room): void {
 function handleMove(ws: WebSocket, state: ConnState, move: MovePayload): void {
   const room = currentRoom(state);
   if (!room.match) return send(ws, { t: "error", code: "NO_MATCH", message: "No hay partida" });
+  room.touch();
   const snapshot = room.match.move(identity(state).npub, move);
   broadcast(room, { t: "match", snapshot });
   if (room.match.isOver) finishMatch(room);
@@ -409,6 +411,7 @@ async function handleProposeBet(ws: WebSocket, state: ConnState, stakeSats: numb
   });
 
   betsByRoom.set(room.id, { betId: created.betId, stakeSats: created.stakeSats, started: false });
+  trackBet({ betId: created.betId, roomId: room.id, stakeSats: created.stakeSats, createdAt: Date.now() });
 
   // Invoice privado a cada jugador (su asiento por color).
   for (const dep of created.deposits) {
@@ -458,6 +461,7 @@ function onBetUpdate(roomId: string, bet: NgeBet): void {
   if (isTerminalBet(bet.status)) {
     record.stop?.();
     betsByRoom.delete(roomId);
+    untrackBet(record.betId);
     broadcast(room, { t: "bet_closed", reason: bet.status });
   }
 }
@@ -510,7 +514,37 @@ function clearBet(room: Room, reason: string): void {
   if (!record) return;
   record.stop?.();
   betsByRoom.delete(room.id);
+  untrackBet(record.betId);
   broadcast(room, { t: "bet_closed", reason });
+}
+
+/**
+ * Reinicio del server con apuestas abiertas: la partida murió con el proceso, así
+ * que reembolsamos. `cancel` cubre pre-fondeo; si el escrow lo rechaza (ya
+ * fondeada), reportar resultado vacío = reembolso. Si ambas fallan (p. ej. ya
+ * estaba liquidada), el escrow la expira solo — la olvidamos igual.
+ */
+async function recoverOrphanBets(): Promise<void> {
+  const pending = pendingBets();
+  if (pending.length === 0) return;
+  if (!betsEnabled()) {
+    console.warn(`[bet] ${pending.length} apuesta(s) huérfana(s) pero sin NGE_CONNECTION; quedan en el store`);
+    return;
+  }
+  for (const bet of pending) {
+    try {
+      await cancelBet(bet.betId);
+      console.log(`[bet] huérfana ${bet.betId} (sala ${bet.roomId}) cancelada — reembolso`);
+    } catch {
+      try {
+        await settleBet(bet.betId, []);
+        console.log(`[bet] huérfana ${bet.betId} (sala ${bet.roomId}) reembolsada via resultado vacío`);
+      } catch (err) {
+        console.warn(`[bet] no se pudo cerrar la huérfana ${bet.betId}:`, err);
+      }
+    }
+    untrackBet(bet.betId);
+  }
 }
 
 /** Sockets vivos de un jugador en una sala. */
@@ -525,11 +559,15 @@ function finishMatch(room: Room): void {
   if (!room.match || room.settled) return;
   room.settled = true;
   room.phase = "finished";
+  room.touch();
   clearTimeout(clockTimers.get(room.id));
   clockTimers.delete(room.id);
   const timers = abandonTimers.get(room.id);
   if (timers) for (const t of timers.values()) clearTimeout(t);
   abandonTimers.delete(room.id);
+  // Sin esto, un `ready` extra tras el final re-arrancaba una partida fantasma
+  // que nunca podía cerrar (settled sigue true).
+  readyByRoom.delete(room.id);
   const winners = room.match.winnerNpubs();
   broadcast(room, {
     t: "ended",
@@ -553,6 +591,7 @@ function rateMatch(room: Room, winners: Npub[]): RatingChange[] | undefined {
 
 function attachToRoom(ws: WebSocket, state: ConnState, room: Room): void {
   state.roomId = room.id;
+  room.touch();
   const set = roomSockets.get(room.id) ?? new Set<WebSocket>();
   set.add(ws);
   roomSockets.set(room.id, set);
@@ -655,7 +694,42 @@ function currentRoom(state: ConnState): Room {
   return room;
 }
 
+// ----------------------------------------------------------------- GC de salas
+
+/** Limpia el estado de index.ts asociado a una sala purgada por el GC. */
+function purgeRoomState(roomId: string): void {
+  clearTimeout(clockTimers.get(roomId));
+  clockTimers.delete(roomId);
+  const timers = abandonTimers.get(roomId);
+  if (timers) for (const t of timers.values()) clearTimeout(t);
+  abandonTimers.delete(roomId);
+  readyByRoom.delete(roomId);
+  roomSockets.delete(roomId);
+}
+
+const sweeper = setInterval(() => {
+  const purged = rooms.sweep({
+    finishedTtlMs: config.finishedRoomTtlMs,
+    emptyTtlMs: config.emptyRoomTtlMs,
+    skip: (room) => {
+      // Con apuesta abierta no se purga (el settle/cancel la cierra primero).
+      if (betsByRoom.has(room.id)) return true;
+      // Con gente conectada la sala está viva: además refrescamos el TTL para
+      // que corra recién desde que el último socket se va.
+      if ((roomSockets.get(room.id)?.size ?? 0) > 0) {
+        room.touch();
+        return true;
+      }
+      return false;
+    },
+  });
+  for (const room of purged) purgeRoomState(room.id);
+  if (purged.length > 0) console.log(`[gc] ${purged.length} sala(s) inactiva(s) purgada(s)`);
+}, config.roomSweepMs);
+sweeper.unref();
+
 server.listen(config.port, () => {
   const served = existsSync(webDist) ? " · sirviendo web/dist" : "";
   console.log(`[ajedrez] http://localhost:${config.port}${served}`);
+  void recoverOrphanBets();
 });

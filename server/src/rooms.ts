@@ -32,6 +32,12 @@ export class Room {
   /** true una vez liquidada la partida (ELO aplicado). Evita doble conteo si
    *  `finishMatch` reentra. */
   settled = false;
+  /** Última actividad (join/jugada/socket vivo): el GC purga por inactividad. */
+  lastActivityAt = Date.now();
+
+  touch(now = Date.now()): void {
+    this.lastActivityAt = now;
+  }
 
   /** Asiento por color. Host = blancas por defecto. */
   private readonly players = new Map<Npub, RoomPlayer>();
@@ -143,6 +149,35 @@ export class RoomManager {
 
   all(): Room[] {
     return [...this.byId.values()];
+  }
+
+  remove(roomId: string): void {
+    const room = this.byId.get(roomId);
+    if (!room) return;
+    this.byId.delete(roomId);
+    this.byCode.delete(room.code);
+  }
+
+  /**
+   * GC: purga salas inactivas (TTL según fase) y devuelve las purgadas para que
+   * el caller limpie su estado asociado (timers, sockets, ready). `skip` permite
+   * proteger salas que siguen vivas (sockets conectados, apuesta sin liquidar).
+   */
+  sweep(opts: {
+    finishedTtlMs: number;
+    emptyTtlMs: number;
+    skip?: (room: Room) => boolean;
+    now?: number;
+  }): Room[] {
+    const now = opts.now ?? Date.now();
+    const purged: Room[] = [];
+    for (const room of this.byId.values()) {
+      if (opts.skip?.(room)) continue;
+      const ttl = room.phase === "finished" ? opts.finishedTtlMs : opts.emptyTtlMs;
+      if (now - room.lastActivityAt > ttl) purged.push(room);
+    }
+    for (const room of purged) this.remove(room.id);
+    return purged;
   }
 }
 
