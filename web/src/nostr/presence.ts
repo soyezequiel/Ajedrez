@@ -44,6 +44,9 @@ export function createPresence(signer: NgpSigner, pubkey?: string): PresenceCont
     publishSync: publishToWriteSync,
     storage: typeof localStorage === "undefined" ? null : localStorage,
     storageKey: "ajedrez.nostrPresence.v1",
+    // Sin esto los fallos best-effort (firmante NIP-46 muerto, timeout de
+    // publish) eran mudos y la presencia se dejaba de renovar en silencio.
+    onError: (stage, err) => console.warn("[presence]", stage, err),
   });
   return {
     start: () => manager.start(PRESENCE_MESSAGE),

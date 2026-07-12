@@ -444,11 +444,18 @@ function logout(): void {
   sessionStorage.removeItem(NAME_KEY);
   login = null;
   state.identity = null;
-  void presence?.stop();
+  // stop() (SDK ≥0.4) despacha el clear pre-firmado SINCRÓNICAMENTE antes de
+  // sus awaits, pero al clear FRESCO (que pisa seguro) le damos hasta 1.5s
+  // antes de recargar — recargar sin esperar abortaba el clear en vuelo y
+  // "Jugando Ajedrez" quedaba colgado hasta vencer su TTL.
+  const stopping = presence?.stop() ?? Promise.resolve();
   presence = null;
   inboxStop?.();
   inboxStop = null;
-  location.reload();
+  void Promise.race([
+    stopping,
+    new Promise((resolve) => setTimeout(resolve, 1500)),
+  ]).finally(() => location.reload());
 }
 
 /** Arranca la bandeja de retos NIP-17 (una vez, solo con login Nostr). */
