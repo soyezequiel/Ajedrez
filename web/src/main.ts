@@ -83,12 +83,12 @@ let inboxStop: (() => void) | null = null;
 /** Reto pendiente de enviar: se dispara cuando se crea la sala del retador. */
 let pendingChallenge: { toPubkey: string } | null = null;
 
-/** Presencia activa desde que autenticás (no desde que entrás a una partida): el
- *  jugador figura "Jugando Ajedrez" apenas abre el juego. Se refresca solo mientras
- *  la pestaña está en primer plano (ver el listener de `visibilitychange`), con un
- *  TTL corto, así soltar o cerrar el juego la baja rápido. Con extensión/bunker la
- *  primera firma puede promptar al cargar — decisión de producto. Se limpia al
- *  cerrar sesión (logout) o la pestaña (pagehide). */
+/** Presencia activa desde que autenticás (no desde que entrás a una partida) y
+ *  mientras el juego esté ABIERTO — aunque la pestaña quede de fondo (mirar la
+ *  tienda no te baja). Con extensión/bunker la primera firma puede promptar al
+ *  cargar — decisión de producto. Se limpia al cerrar sesión (logout) o la
+ *  pestaña (pagehide, clear pre-firmado); si el clear no sale (crash), el TTL de
+ *  180s la vence solo. */
 function ensurePresence(): PresenceController | null {
   if (login?.kind !== "nostr") return null;
   presence ??= createPresence(login.signer);
@@ -109,17 +109,12 @@ window.addEventListener("pagehide", (event) => {
   presence?.clearNow();
 });
 
-// Presencia solo mientras el juego está EN PRIMER PLANO. Al pasar a segundo plano
-// (cambiar de pestaña/app, minimizar, cerrar) `pause()` PUBLICA EL CLEAR ya mismo,
-// así la tienda deja de detectarte en segundos en vez de esperar el TTL. `pagehide`
-// re-manda el clear sincrónico como respaldo. Al volver, `resume()` re-anuncia. Es
-// la señal correcta de teardown (a diferencia de `pagehide`, `visibilitychange`
-// dispara mientras la página sigue viva, así el `publish` async alcanza a salir).
-document.addEventListener("visibilitychange", () => {
-  if (login?.kind !== "nostr") return;
-  if (document.hidden) presence?.pause();
-  else ensurePresence()?.resume();
-});
+// OJO: acá NO hay gating por `visibilitychange` — es a propósito y ya se probó
+// dos veces que ambas variantes están MAL: limpiar al ocultar te baja apenas mirás
+// la tienda, y pausar el latido al ocultar te deja morir por TTL en ~1 min mientras
+// mirás la tienda ("aparece un rato y se va"). "Jugando" = el juego ABIERTO: el
+// heartbeat corre aunque la pestaña esté de fondo (el navegador lo estrangula a
+// ~1/min; el TTL de 180s lo tolera). El cierre real limpia vía `pagehide`.
 
 const app = document.getElementById("app")!;
 const net = new Net(WS_URL);
