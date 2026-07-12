@@ -83,10 +83,12 @@ let inboxStop: (() => void) | null = null;
 /** Reto pendiente de enviar: se dispara cuando se crea la sala del retador. */
 let pendingChallenge: { toPubkey: string } | null = null;
 
-/** Presencia activa durante TODA la sesión Nostr (arranca al autenticar, no al
- *  entrar a una partida): el jugador figura "Jugando Ajedrez" apenas abre el juego.
- *  Con extensión/bunker la primera firma puede promptar al cargar — decisión de
- *  producto. Se limpia al cerrar sesión (logout) o la pestaña (pagehide). */
+/** Presencia activa desde que autenticás (no desde que entrás a una partida): el
+ *  jugador figura "Jugando Ajedrez" apenas abre el juego. Se refresca solo mientras
+ *  la pestaña está en primer plano (ver el listener de `visibilitychange`), con un
+ *  TTL corto, así soltar o cerrar el juego la baja rápido. Con extensión/bunker la
+ *  primera firma puede promptar al cargar — decisión de producto. Se limpia al
+ *  cerrar sesión (logout) o la pestaña (pagehide). */
 function ensurePresence(): PresenceController | null {
   if (login?.kind !== "nostr") return null;
   presence ??= createPresence(login.signer);
@@ -105,6 +107,19 @@ function ensurePresence(): PresenceController | null {
 window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
   presence?.clearNow();
+});
+
+// Presencia solo mientras el juego está EN PRIMER PLANO. Al pasar a segundo plano
+// (cambiar de pestaña/app, minimizar) pausamos el latido: la presencia se
+// auto-expira por su TTL corto si no volvés, así una pestaña abierta de fondo no
+// te deja "Jugando Ajedrez" para siempre. No limpiamos acá a propósito — un
+// vistazo rápido a la tienda te sigue mostrando presente hasta el TTL, y evitamos
+// re-firmar en cada alt-tab. Al volver, `resume()` re-anuncia (sin prompt si la
+// presencia sigue fresca). El cierre real lo maneja `pagehide` (clear inmediato).
+document.addEventListener("visibilitychange", () => {
+  if (login?.kind !== "nostr") return;
+  if (document.hidden) presence?.pause();
+  else ensurePresence()?.resume();
 });
 
 const app = document.getElementById("app")!;

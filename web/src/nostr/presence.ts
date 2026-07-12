@@ -8,17 +8,29 @@ import type { Event } from "nostr-tools";
 import { GAME_COORD, PRESENCE_MESSAGE } from "../config.js";
 import { publishToWrite, publishToWriteSync } from "./relays.js";
 
-/** TTL de la presencia (segundos). Mayor que el heartbeat para evitar titileo. */
-const PRESENCE_TTL_SEC = 240;
-/** Cada cuánto revisamos si toca re-firmar (ms). */
-const HEARTBEAT_MS = 60_000;
+/** TTL de la presencia (segundos). Corto a propósito: es el TIEMPO MÁXIMO que
+ *  la tienda te sigue mostrando "Jugando Ajedrez" tras cerrar/soltar el juego si
+ *  el clear no llegó a salir. Debe ser cómodamente mayor que MIN_RESIGN_MS para
+ *  no titilar mientras jugás (margen para un latido perdido / clock drift). */
+const PRESENCE_TTL_SEC = 60;
+/** Cada cuánto revisamos si toca re-firmar (ms). Debe dividir MIN_RESIGN_MS de
+ *  forma que la cadencia real de re-firma (ceil(MIN_RESIGN/HEARTBEAT)·HEARTBEAT)
+ *  quede holgadamente por debajo del TTL: 20s ⇒ re-firma cada 40s, TTL 60s. */
+const HEARTBEAT_MS = 20_000;
 /** Mínimo entre firmas: no re-firmamos más seguido para no spamear al signer
  *  (importa con NIP-46, que puede pedir aprobación en cada firma). */
-const MIN_RESIGN_MS = 120_000;
+const MIN_RESIGN_MS = 40_000;
 
 export interface PresenceController {
-  /** Activa "Jugando Ajedrez" y mantiene el heartbeat. */
+  /** Activa "Jugando Ajedrez" y mantiene el heartbeat (firma inmediata). */
   start(): void;
+  /** Vuelve a primer plano: re-late respetando el throttle (no re-firma si la
+   *  última presencia sigue fresca), sin el prompt de un `start()` forzado. */
+  resume(): void;
+  /** Pasa a segundo plano: deja de latir SIN limpiar (la presencia se auto-expira
+   *  por TTL si no volvés) y SIN olvidar la última firma (un cambio breve de
+   *  pestaña no re-firma al volver). */
+  pause(): void;
   /** Limpia la presencia (desaparece ya) y corta el heartbeat. */
   stop(): Promise<void>;
   /**
@@ -68,11 +80,17 @@ export function createPresence(signer: NgpSigner): PresenceController {
     }
   }
 
-  function stopHeartbeat(): void {
+  function clearTimer(): void {
     if (timer !== null) {
       clearInterval(timer);
       timer = null;
     }
+  }
+
+  function stopHeartbeat(): void {
+    // Teardown REAL (logout / cierre): corta el latido y OLVIDA la última firma,
+    // así una sesión nueva vuelve a anunciarse desde cero.
+    clearTimer();
     lastSignAt = 0;
   }
 
@@ -84,6 +102,21 @@ export function createPresence(signer: NgpSigner): PresenceController {
       if (timer !== null) return;
       void beat(true);
       timer = setInterval(() => void beat(), HEARTBEAT_MS);
+    },
+    resume(): void {
+      // Volver a primer plano: re-arranca el latido pero con `beat(false)`, que
+      // respeta MIN_RESIGN — si soltaste la pestaña unos segundos, no re-firma
+      // (la presencia sigue viva); si estuviste afuera más que el TTL, re-anuncia.
+      if (timer !== null) return;
+      void beat(false);
+      timer = setInterval(() => void beat(), HEARTBEAT_MS);
+    },
+    pause(): void {
+      // Segundo plano: dejamos de latir SIN limpiar ni olvidar la firma. La
+      // presencia se auto-expira por TTL si no volvés; si volvés pronto, `resume`
+      // no re-firma. Así una pestaña abierta de fondo no queda "jugando" para
+      // siempre, sin el costo de re-firmar en cada alt-tab.
+      clearTimer();
     },
     async stop(): Promise<void> {
       stopHeartbeat();
