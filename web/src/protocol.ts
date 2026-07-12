@@ -25,6 +25,8 @@ export interface MatchSnapshot {
   blackClockMs: number;
   inCheck: boolean;
   lastMove: MovePayload | null;
+  /** Historial completo en SAN (Nf3, exd5…); sobrevive a reloads. */
+  sanHistory: string[];
   result: MatchResult;
 }
 

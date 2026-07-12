@@ -32,7 +32,6 @@ import type {
   BetView,
   Color,
   MatchSnapshot,
-  MovePayload,
   RatingChange,
   RoomPlayer,
   RoomView,
@@ -113,9 +112,6 @@ interface State {
   bet: BetView | null;
   /** Invoice de depósito propio (para pagar con billetera). */
   myBetInvoice: { bolt11: string | null; amountSats: number; stakeSats: number } | null;
-  /** Historial de jugadas de ESTA sesión (coordenadas). El servidor solo manda
-   *  `lastMove`, así que lo acumulamos localmente; se reinicia al entrar a una sala. */
-  history: MovePayload[];
 }
 
 const state: State = {
@@ -132,7 +128,6 @@ const state: State = {
   betsEnabled: false,
   bet: null,
   myBetInvoice: null,
-  history: [],
 };
 
 let board: BoardController | null = null;
@@ -522,13 +517,12 @@ function wireNet(): void {
     const wasInRoom = state.room !== null;
     state.room = m.room;
     writeSavedRoom(m.room.id);
-    if (m.room.phase === "lobby") { state.ready = false; state.history = []; }
+    if (m.room.phase === "lobby") state.ready = false;
     // Revancha concedida: la sala vuelve a "playing" con el resultado viejo en
     // pantalla — limpiar el estado de la partida anterior.
     if (m.room.phase === "playing" && state.ended) {
       state.ended = null;
       state.myRating = null;
-      state.history = [];
       state.drawOfferBy = null;
       state.rematchRequested = false;
       state.rematchOffer = null;
@@ -539,7 +533,6 @@ function wireNet(): void {
     else patchGame();
   });
   net.on("match", (m) => {
-    recordMove(m.snapshot.lastMove);
     state.match = m.snapshot;
     state.matchReceivedAt = Date.now();
     state.drawOfferBy = null;
@@ -610,7 +603,6 @@ function wireNet(): void {
       state.room = null;
       state.match = null;
       state.ended = null;
-      state.history = [];
       toast("La sala ya no existe");
       renderHome();
       return;
@@ -650,14 +642,6 @@ function cleanUrl(): void {
   history.replaceState(null, "", url.toString());
 }
 
-/** Acumula el último movimiento si es nuevo respecto al anterior. */
-function recordMove(last: MovePayload | null): void {
-  if (!last) return;
-  const prev = state.history[state.history.length - 1];
-  if (prev && prev.from === last.from && prev.to === last.to) return;
-  state.history.push(last);
-}
-
 // --------------------------------------------------------------- helpers de identidad
 
 function myColor(): Color | null {
@@ -688,7 +672,8 @@ function endedText(winners: string[], result?: MatchSnapshot["result"]): { text:
     fifty: "por regla de 50 movimientos",
     agreement: "por acuerdo",
   };
-  const jugadas = state.history.length ? ` · ${state.history.length} jugadas` : "";
+  const plies = state.match?.sanHistory.length ?? 0;
+  const jugadas = plies ? ` · ${plies} jugadas` : "";
   if (winners.length === 0) return { text: "Tablas", sub: (by ? reason[by] : "acordadas") + jugadas };
   const me = state.identity?.npub;
   const won = me && winners.includes(me);
@@ -1095,6 +1080,9 @@ function patchSidePanels(): void {
   if (!side || !state.room) return;
   side.innerHTML = phasePanelHtml();
   wireSidePanels();
+  // Historial: mantener la última jugada a la vista.
+  const grid = document.getElementById("history-grid");
+  if (grid) grid.scrollTop = grid.scrollHeight;
 }
 
 function phasePanelHtml(): string {
@@ -1105,22 +1093,23 @@ function phasePanelHtml(): string {
 }
 
 function historyCard(): string {
+  const sans = state.match?.sanHistory ?? [];
   const rows: string[] = [];
-  const last = state.history.length - 1;
-  for (let i = 0; i < state.history.length; i += 2) {
-    const w = state.history[i];
-    const b = state.history[i + 1];
+  const last = sans.length - 1;
+  for (let i = 0; i < sans.length; i += 2) {
+    const w = sans[i];
+    const b = sans[i + 1];
     if (!w) continue;
     const wLast = i === last ? " last" : "";
     const bLast = i + 1 === last ? " last" : "";
     rows.push(
       `<span class="num">${i / 2 + 1}.</span>` +
-        `<span class="ply${wLast}">${w.from}${w.to}</span>` +
-        `<span class="ply${bLast}">${b ? b.from + b.to : ""}</span>`,
+        `<span class="ply${wLast}">${w}</span>` +
+        `<span class="ply${bLast}">${b ?? ""}</span>`,
     );
   }
   const body = rows.length
-    ? `<div class="history-grid">${rows.join("")}</div>`
+    ? `<div class="history-grid" id="history-grid">${rows.join("")}</div>`
     : `<p class="history-empty">Sin jugadas todavía.</p>`;
   return `<div class="card history">
     <p class="section-label">Jugadas</p>
@@ -1339,7 +1328,7 @@ function zapRivalButton(): string {
 /** Texto del logro según el resultado, para publicar como kind:1. */
 function achievementText(): string {
   const e = state.ended;
-  const plies = state.history.length;
+  const plies = state.match?.sanHistory.length ?? 0;
   const jugadas = plies ? ` en ${Math.ceil(plies / 2)} jugadas` : "";
   const rating = state.myRating ? ` Mi rating: ${state.myRating.rating}.` : "";
   const won = e && state.identity && e.winnerNpubs.includes(state.identity.npub);

@@ -203,6 +203,7 @@ export class ChessMatch {
       blackClockMs: this.blackClockMs,
       inCheck: this.chess.inCheck(),
       lastMove: this.lastMove,
+      sanHistory: this.chess.history(),
       result: this.result,
     };
   }
