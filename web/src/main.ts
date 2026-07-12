@@ -83,7 +83,10 @@ let inboxStop: (() => void) | null = null;
 /** Reto pendiente de enviar: se dispara cuando se crea la sala del retador. */
 let pendingChallenge: { toPubkey: string } | null = null;
 
-/** Presencia activa mientras el jugador está en una sala (solo Nostr). */
+/** Presencia activa durante TODA la sesión Nostr (arranca al autenticar, no al
+ *  entrar a una partida): el jugador figura "Jugando Ajedrez" apenas abre el juego.
+ *  Con extensión/bunker la primera firma puede promptar al cargar — decisión de
+ *  producto. Se limpia al cerrar sesión (logout) o la pestaña (pagehide). */
 function ensurePresence(): PresenceController | null {
   if (login?.kind !== "nostr") return null;
   presence ??= createPresence(login.signer);
@@ -280,9 +283,8 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
   if (token) {
     // Reconexión/reload: autenticamos por TOKEN sin bloquear en el firmador. La
     // extensión puede tardar o directamente colgarse en getPublicKey; la sesión no
-    // debe depender de eso. El signer queda listo para features (marcador, retos)
-    // pero NO lo tocamos al cargar: llamar getPublicKey acá dispara el popup de la
-    // extensión (Alby) en cada apertura. Prompta recién cuando el usuario firma algo.
+    // debe depender de eso. No llamamos getPublicKey acá; la primera firma llega
+    // con la presencia (al autenticar), que con extensión puede promptar al abrir.
     login = { kind: "nostr", signer: toNgpSigner(signer), displayName: "" };
     net.connect();
     net.authToken(token);
@@ -356,10 +358,9 @@ function authViaToken(token: string): void {
   net.authToken(token);
   restorePromise
     .then((s) => {
-      // Reemplazamos el firmador perezoso por el real para las features, pero NO
-      // llamamos getPublicKey/perfil acá: la sesión ya vale por token y hacerlo
-      // dispararía el popup de la extensión (Alby) en cada carga de la página. La
-      // extensión prompta recién cuando el usuario hace algo que firma.
+      // Reemplazamos el firmador perezoso por el real para las features, sin llamar
+      // getPublicKey/perfil acá: la sesión ya vale por token. La primera firma llega
+      // con la presencia (al autenticar), que con extensión puede promptar al abrir.
       if (s && login?.kind === "nostr") login.signer = toNgpSigner(s);
     })
     .catch(() => {});
@@ -526,6 +527,9 @@ function wireNet(): void {
     if (m.token) writeSessionToken(m.token); // guarda/rota el token de sesión
     state.identity = m.identity;
     startInbox();
+    // Presencia NIP-38 desde el arranque de la sesión (no desde la partida): el
+    // jugador aparece presente apenas abre el juego. Idempotente en reconexiones.
+    ensurePresence()?.start();
     const join = pendingJoin();
     const saved = readSavedRoom();
     cleanUrl();
@@ -971,7 +975,6 @@ function topbar(): string {
 
 function renderHome(): void {
   clearConnectWatchdog();
-  void presence?.stop();
   app.innerHTML =
     topbar() +
     `<main class="home">
@@ -1046,7 +1049,6 @@ function enterGame(): void {
   state.rematchOffer = null;
   state.bet = null;
   state.myBetInvoice = null;
-  ensurePresence()?.start();
   app.innerHTML =
     topbar() +
     `<main class="game">

@@ -78,8 +78,12 @@ export function createPresence(signer: NgpSigner): PresenceController {
 
   return {
     start(): void {
+      // Idempotente: si el heartbeat ya corre, no forzamos otra firma (con NIP-46/07
+      // cada firma puede ser un prompt). Se llama al autenticar y puede re-llamarse
+      // en cualquier momento sin costo.
+      if (timer !== null) return;
       void beat(true);
-      timer ??= setInterval(() => void beat(), HEARTBEAT_MS);
+      timer = setInterval(() => void beat(), HEARTBEAT_MS);
     },
     async stop(): Promise<void> {
       stopHeartbeat();
