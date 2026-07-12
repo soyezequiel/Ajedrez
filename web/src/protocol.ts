@@ -92,6 +92,7 @@ export type ClientMessage =
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
+  | { t: "rematch" }
   | { t: "propose_bet"; stakeSats: number }
   | { t: "cancel_bet" }
   // MODO DE PRUEBA (panel diag) — remover junto con nostr/diag.ts.
@@ -109,6 +110,8 @@ export type ServerMessage =
   | { t: "room"; room: RoomView }
   | { t: "match"; snapshot: MatchSnapshot }
   | { t: "draw_offer"; byNpub: string }
+  /** Un jugador pidió revancha (se acepta mandando el propio `rematch`). */
+  | { t: "rematch_offer"; byNpub: string }
   | { t: "ended"; result: MatchResult; winnerNpubs: string[]; ratings?: RatingChange[] }
   /** Un jugador se desconectó (online=false, con gracia para volver) o volvió. */
   | { t: "presence"; npub: string; online: boolean; graceMs?: number }

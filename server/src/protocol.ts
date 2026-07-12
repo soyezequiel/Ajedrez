@@ -53,6 +53,9 @@ export type ClientMessage =
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
+  /** Pide revancha tras `finished`; con el pedido de ambos arranca la nueva
+   *  partida (colores invertidos, sin apuesta). */
+  | { t: "rematch" }
   /** El anfitrión propone una apuesta por `stakeSats` (por asiento). */
   | { t: "propose_bet"; stakeSats: number }
   /** Cancela la apuesta pre-fondeo. */
@@ -80,6 +83,8 @@ export type ServerMessage =
   | { t: "room"; room: RoomView }
   | { t: "match"; snapshot: MatchSnapshot }
   | { t: "draw_offer"; byNpub: string }
+  /** Un jugador pidió revancha (el otro la acepta mandando su propio `rematch`). */
+  | { t: "rematch_offer"; byNpub: string }
   | { t: "ended"; result: MatchResult; winnerNpubs: string[]; ratings?: RatingChange[] }
   /** Un jugador se desconectó (online=false, con gracia para volver) o volvió. */
   | { t: "presence"; npub: string; online: boolean; graceMs?: number }

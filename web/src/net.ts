@@ -59,6 +59,7 @@ export class Net {
     this.send({ t: "move", move: { from, to, promotion } });
   }
   resign() { this.send({ t: "resign" }); }
+  rematch() { this.send({ t: "rematch" }); }
   offerDraw() { this.send({ t: "offer_draw" }); }
   acceptDraw() { this.send({ t: "accept_draw" }); }
   proposeBet(stakeSats: number) { this.send({ t: "propose_bet", stakeSats }); }

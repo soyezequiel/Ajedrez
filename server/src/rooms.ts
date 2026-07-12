@@ -43,6 +43,8 @@ export class Room {
   private readonly players = new Map<Npub, RoomPlayer>();
   /** Oferta de tablas pendiente del npub que la ofreció. */
   drawOfferBy: Npub | null = null;
+  /** Npubs que pidieron revancha tras `finished`. Con ambos, la sala se reinicia. */
+  readonly rematchBy = new Set<Npub>();
 
   constructor(host: PlayerInit, id?: string) {
     // `id` externo = sala de un link `?join=<id>` (invite propio o Room Link de la
@@ -91,6 +93,22 @@ export class Room {
 
   get black(): RoomPlayer | undefined {
     return this.roster.find((p) => p.color === "b");
+  }
+
+  /**
+   * Deja la sala lista para una revancha: colores invertidos, sin partida ni
+   * estado de la anterior. El caller arranca después con `startMatch`.
+   */
+  rematchReset(): void {
+    if (this.phase !== "finished")
+      throw new RoomError("NOT_FINISHED", "La partida no terminó");
+    for (const p of this.players.values())
+      p.color = p.color === "w" ? "b" : p.color === "b" ? "w" : null;
+    this.phase = "lobby";
+    this.match = null;
+    this.settled = false;
+    this.drawOfferBy = null;
+    this.rematchBy.clear();
   }
 
   /** Crea la partida (reloj corriendo) cuando ambos jugadores están listos. */

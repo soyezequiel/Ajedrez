@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RoomManager } from "./rooms.js";
+import { RoomError, RoomManager } from "./rooms.js";
 
 const HOST = { npub: "u_ana", displayName: "Ana" };
 const GUEST = { npub: "u_beto", displayName: "Beto" };
@@ -56,6 +56,38 @@ describe("RoomManager — GC de salas (sweep)", () => {
 
     expect(rooms.sweep({ ...TTL, now: TTL.finishedTtlMs + 1 })).toHaveLength(0);
     expect(rooms.sweep({ ...TTL, now: TTL.finishedTtlMs * 2 + 1 })).toHaveLength(1);
+  });
+
+  it("rematchReset invierte colores y deja la sala lista para otra partida", () => {
+    const rooms = new RoomManager();
+    const room = rooms.create(HOST);
+    room.join(GUEST);
+    const first = room.startMatch(0);
+    room.phase = "finished";
+    room.settled = true;
+    room.drawOfferBy = HOST.npub;
+    room.rematchBy.add(HOST.npub).add(GUEST.npub);
+
+    room.rematchReset();
+    expect(room.white?.npub).toBe(GUEST.npub); // colores invertidos
+    expect(room.black?.npub).toBe(HOST.npub);
+    expect(room.settled).toBe(false);
+    expect(room.match).toBeNull();
+    expect(room.drawOfferBy).toBeNull();
+    expect(room.rematchBy.size).toBe(0);
+
+    const second = room.startMatch(0);
+    expect(second).not.toBe(first);
+    expect(second.snapshot().white).toBe(GUEST.npub);
+    expect(room.phase).toBe("playing");
+  });
+
+  it("rematchReset exige que la partida haya terminado", () => {
+    const rooms = new RoomManager();
+    const room = rooms.create(HOST);
+    room.join(GUEST);
+    room.startMatch(0); // phase = playing
+    expect(() => room.rematchReset()).toThrow(RoomError);
   });
 
   it("remove() es idempotente y no rompe con ids desconocidos", () => {

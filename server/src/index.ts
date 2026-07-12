@@ -150,6 +150,8 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
       return handleOfferDraw(ws, state);
     case "accept_draw":
       return handleAcceptDraw(ws, state);
+    case "rematch":
+      return handleRematch(ws, state);
     case "propose_bet":
       return handleProposeBet(ws, state, msg.stakeSats);
     case "cancel_bet":
@@ -301,8 +303,11 @@ function resync(ws: WebSocket, room: Room): void {
   send(ws, { t: "match", snapshot: match.snapshot() });
   if (room.drawOfferBy && !match.isOver)
     send(ws, { t: "draw_offer", byNpub: room.drawOfferBy });
-  if (match.isOver)
+  if (match.isOver) {
     send(ws, { t: "ended", result: match.getResult(), winnerNpubs: match.winnerNpubs() });
+    // Pedidos de revancha pendientes (el que re-entra por F5 los perdió).
+    for (const npub of room.rematchBy) send(ws, { t: "rematch_offer", byNpub: npub });
+  }
 }
 
 function handleReady(ws: WebSocket, state: ConnState): void {
@@ -370,6 +375,22 @@ function handleAcceptDraw(ws: WebSocket, state: ConnState): void {
   const snapshot = room.match.agreeDraw();
   broadcast(room, { t: "match", snapshot });
   finishMatch(room);
+}
+
+/** Revancha: cada jugador la pide; con ambos pedidos la sala se reinicia con
+ *  colores invertidos y la partida arranca directo (sin pasar por "listo"). */
+function handleRematch(ws: WebSocket, state: ConnState): void {
+  const room = currentRoom(state);
+  const me = identity(state);
+  if (room.phase !== "finished" || !room.isFull || !room.hasPlayer(me.npub)) return;
+  room.touch();
+  room.rematchBy.add(me.npub);
+  if (room.roster.every((p) => room.rematchBy.has(p.npub))) {
+    room.rematchReset();
+    startAndBroadcast(room);
+  } else {
+    broadcast(room, { t: "rematch_offer", byNpub: me.npub });
+  }
 }
 
 // ----------------------------------------------------------------- apuestas NGE

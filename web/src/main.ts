@@ -103,6 +103,10 @@ interface State {
   ended: { winnerNpubs: string[]; text: string; sub: string } | null;
   /** Cambio de rating ELO propio de la última partida (solo login Nostr). */
   myRating: RatingChange | null;
+  /** ¿Ya pedí revancha en esta pantalla de resultado? */
+  rematchRequested: boolean;
+  /** Npub del rival que pidió revancha (banner "aceptar"). */
+  rematchOffer: string | null;
   /** ¿El server tiene el escrow de apuestas activo? */
   betsEnabled: boolean;
   /** Apuesta en curso de la sala, o null. */
@@ -123,6 +127,8 @@ const state: State = {
   drawOfferBy: null,
   ended: null,
   myRating: null,
+  rematchRequested: false,
+  rematchOffer: null,
   betsEnabled: false,
   bet: null,
   myBetInvoice: null,
@@ -512,6 +518,17 @@ function wireNet(): void {
     state.room = m.room;
     writeSavedRoom(m.room.id);
     if (m.room.phase === "lobby") { state.ready = false; state.history = []; }
+    // Revancha concedida: la sala vuelve a "playing" con el resultado viejo en
+    // pantalla — limpiar el estado de la partida anterior.
+    if (m.room.phase === "playing" && state.ended) {
+      state.ended = null;
+      state.myRating = null;
+      state.history = [];
+      state.drawOfferBy = null;
+      state.rematchRequested = false;
+      state.rematchOffer = null;
+      toast("¡Revancha! Colores invertidos");
+    }
     maybeSendPendingChallenge(m.room);
     if (!wasInRoom) enterGame();
     else patchGame();
@@ -545,9 +562,20 @@ function wireNet(): void {
     state.drawOfferBy = m.byNpub;
     patchSidePanels();
   });
+  net.on("rematch_offer", (m) => {
+    if (m.byNpub === state.identity?.npub) {
+      state.rematchRequested = true; // eco propio (p. ej. resync tras F5)
+    } else {
+      state.rematchOffer = m.byNpub;
+      toast(`${nameOf(m.byNpub)} quiere revancha`);
+    }
+    patchSidePanels();
+  });
   net.on("ended", (m) => {
     state.ended = { winnerNpubs: m.winnerNpubs, ...endedText(m.winnerNpubs, m.result) };
     state.myRating = m.ratings?.find((r) => r.npub === state.identity?.npub) ?? null;
+    state.rematchRequested = false;
+    state.rematchOffer = null;
     if (board) board.setInteractive(false);
     publishMyRating();
     patchGame();
@@ -971,6 +999,8 @@ function sendChallengeFromHome(): void {
 function enterGame(): void {
   state.ended = null;
   state.myRating = null;
+  state.rematchRequested = false;
+  state.rematchOffer = null;
   state.bet = null;
   state.myBetInvoice = null;
   ensurePresence()?.start();
@@ -1241,11 +1271,21 @@ function endedPanel(): string {
     <p class="result-sub">${e.sub}</p>
     ${ratingLine}
     <div class="actions" style="margin-top:22px">
-      <button class="btn-gold" id="home">Volver al inicio</button>
+      ${rematchButton()}
+      <button id="home">Volver al inicio</button>
       ${login?.kind === "nostr" ? `<button id="share-achievement">Compartir logro ♟</button>` : ""}
       ${zapRivalButton()}
     </div>
   </div>`;
+}
+
+/** Botón de revancha según el estado del pedido (solo con el rival presente). */
+function rematchButton(): string {
+  if (!state.room?.players || state.room.players.length < 2) return "";
+  if (state.rematchRequested) return `<button disabled>Revancha pedida — esperando al rival…</button>`;
+  if (state.rematchOffer)
+    return `<button class="btn-gold" id="rematch">Aceptar revancha de ${nameOf(state.rematchOffer)}</button>`;
+  return `<button class="btn-gold" id="rematch">⚔ Revancha</button>`;
 }
 
 /** El otro jugador de la sala (el rival). */
@@ -1297,6 +1337,11 @@ function wireSidePanels(): void {
   on("offer-draw", () => { net.offerDraw(); toast("Tablas ofrecidas"); });
   on("accept-draw", () => net.acceptDraw());
   on("home", () => { clearSavedRoom(); location.reload(); });
+  on("rematch", () => {
+    state.rematchRequested = true;
+    net.rematch();
+    patchSidePanels();
+  });
   on("share-achievement", () => {
     if (login?.kind !== "nostr") return;
     const btn = document.getElementById("share-achievement") as HTMLButtonElement | null;
