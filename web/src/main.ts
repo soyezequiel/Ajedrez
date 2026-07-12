@@ -110,12 +110,11 @@ window.addEventListener("pagehide", (event) => {
 });
 
 // Presencia solo mientras el juego está EN PRIMER PLANO. Al pasar a segundo plano
-// (cambiar de pestaña/app, minimizar) pausamos el latido: la presencia se
-// auto-expira por su TTL corto si no volvés, así una pestaña abierta de fondo no
-// te deja "Jugando Ajedrez" para siempre. No limpiamos acá a propósito — un
-// vistazo rápido a la tienda te sigue mostrando presente hasta el TTL, y evitamos
-// re-firmar en cada alt-tab. Al volver, `resume()` re-anuncia (sin prompt si la
-// presencia sigue fresca). El cierre real lo maneja `pagehide` (clear inmediato).
+// (cambiar de pestaña/app, minimizar, cerrar) `pause()` PUBLICA EL CLEAR ya mismo,
+// así la tienda deja de detectarte en segundos en vez de esperar el TTL. `pagehide`
+// re-manda el clear sincrónico como respaldo. Al volver, `resume()` re-anuncia. Es
+// la señal correcta de teardown (a diferencia de `pagehide`, `visibilitychange`
+// dispara mientras la página sigue viva, así el `publish` async alcanza a salir).
 document.addEventListener("visibilitychange", () => {
   if (login?.kind !== "nostr") return;
   if (document.hidden) presence?.pause();

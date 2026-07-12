@@ -104,19 +104,22 @@ export function createPresence(signer: NgpSigner): PresenceController {
       timer = setInterval(() => void beat(), HEARTBEAT_MS);
     },
     resume(): void {
-      // Volver a primer plano: re-arranca el latido pero con `beat(false)`, que
-      // respeta MIN_RESIGN — si soltaste la pestaña unos segundos, no re-firma
-      // (la presencia sigue viva); si estuviste afuera más que el TTL, re-anuncia.
+      // Volver a primer plano: `pause` limpió la presencia al ocultar, así que
+      // re-anunciamos siempre (`beat(true)`) para reaparecer "Jugando Ajedrez".
       if (timer !== null) return;
-      void beat(false);
+      void beat(true);
       timer = setInterval(() => void beat(), HEARTBEAT_MS);
     },
     pause(): void {
-      // Segundo plano: dejamos de latir SIN limpiar ni olvidar la firma. La
-      // presencia se auto-expira por TTL si no volvés; si volvés pronto, `resume`
-      // no re-firma. Así una pestaña abierta de fondo no queda "jugando" para
-      // siempre, sin el costo de re-firmar en cada alt-tab.
+      // Segundo plano / cierre: USAMOS EL CLEAR ya mismo — publicamos el clear
+      // pre-firmado (async, pero `publish` encola el `ws.send` en el acto, así que
+      // sale aun si la pestaña se está cerrando) y cortamos el latido. No olvidamos
+      // `preparedClear`: `pagehide` lo re-manda sincrónico como respaldo (idempotente,
+      // Luna descarta el duplicado). Al volver, `resume` re-anuncia. Así el juego
+      // deja de detectarse apenas lo ocultás/cerrás, sin esperar el TTL.
       clearTimer();
+      if (preparedClear) void publishToWrite(preparedClear);
+      lastSignAt = 0; // la presencia quedó limpiada → `resume` debe re-anunciar
     },
     async stop(): Promise<void> {
       stopHeartbeat();
