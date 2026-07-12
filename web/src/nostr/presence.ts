@@ -3,8 +3,10 @@ import {
   buildPresenceEvent,
   type NgpSigner,
 } from "nostr-game-protocol/ngp";
+import { buildPresenceClearTemplate } from "nostr-game-protocol/ngp-core";
+import type { Event } from "nostr-tools";
 import { GAME_COORD, PRESENCE_MESSAGE } from "../config.js";
-import { publishToWrite } from "./relays.js";
+import { publishToWrite, publishToWriteSync } from "./relays.js";
 
 /** TTL de la presencia (segundos). Mayor que el heartbeat para evitar titileo. */
 const PRESENCE_TTL_SEC = 240;
@@ -19,6 +21,11 @@ export interface PresenceController {
   start(): void;
   /** Limpia la presencia (desaparece ya) y corta el heartbeat. */
   stop(): Promise<void>;
+  /**
+   * Limpieza SÍNCRONA para el cierre de pestaña (`pagehide`): manda el clear
+   * pre-firmado sin `await`. No firma en el momento (no llegaría en el unload).
+   */
+  clearNow(): void;
 }
 
 /**
@@ -28,6 +35,12 @@ export interface PresenceController {
 export function createPresence(signer: NgpSigner): PresenceController {
   let timer: ReturnType<typeof setInterval> | null = null;
   let lastSignAt = 0;
+  // Clear PRE-FIRMADO de la última presencia, listo para mandar sincrónicamente al
+  // cerrar la pestaña. Firmar en `pagehide` no llega con NIP-07/46 (la firma es
+  // async y el navegador mata la página antes); pre-firmarlo mientras el juego está
+  // vivo permite un `ws.send` sincrónico en el cierre. Su `created_at` es el de la
+  // presencia + 1 para que gane la resolución del slot replaceable `d:general`.
+  let preparedClear: Event | null = null;
 
   async function beat(force = false): Promise<void> {
     const now = Date.now();
@@ -40,9 +53,27 @@ export function createPresence(signer: NgpSigner): PresenceController {
         ttlSec: PRESENCE_TTL_SEC,
       });
       await publishToWrite(event);
+      // Pre-firmamos el clear correspondiente a ESTA presencia (created_at + 1 para
+      // que la pise). Se re-genera en cada beat, así siempre matchea la más nueva.
+      try {
+        preparedClear = await signer.signEvent(
+          buildPresenceClearTemplate({ createdAt: event.created_at + 1 }),
+        );
+      } catch {
+        // Si falla, dejamos el clear previo (best-effort): peor caso, no pisa y la
+        // presencia vence sola por TTL.
+      }
     } catch {
       // Best-effort: si el signer o los relays fallan, seguimos jugando.
     }
+  }
+
+  function stopHeartbeat(): void {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+    lastSignAt = 0;
   }
 
   return {
@@ -51,15 +82,22 @@ export function createPresence(signer: NgpSigner): PresenceController {
       timer ??= setInterval(() => void beat(), HEARTBEAT_MS);
     },
     async stop(): Promise<void> {
-      if (timer !== null) {
-        clearInterval(timer);
-        timer = null;
-      }
-      lastSignAt = 0;
+      stopHeartbeat();
+      const clear = preparedClear;
+      preparedClear = null;
       try {
-        await publishToWrite(await buildPresenceClearEvent(signer));
+        // Con tiempo (volver al home / logout) firmamos uno fresco si no había
+        // pre-firmado; en el cierre de pestaña usamos `clearNow` (sincrónico).
+        await publishToWrite(clear ?? (await buildPresenceClearEvent(signer)));
       } catch {
         // Best-effort.
+      }
+    },
+    clearNow(): void {
+      stopHeartbeat();
+      if (preparedClear) {
+        publishToWriteSync(preparedClear);
+        preparedClear = null;
       }
     },
   };

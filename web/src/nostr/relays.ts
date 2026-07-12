@@ -24,6 +24,20 @@ export function publishToWrite(event: Event): Promise<void> {
   return publishTo([...RELAYS.write], event);
 }
 
+/**
+ * Envía un evento YA FIRMADO a los relays de escritura de forma SÍNCRONA: encola
+ * el `ws.send` ya mismo, sin `await`. Es para el cierre de pestaña (`pagehide`),
+ * donde el navegador no espera trabajo asíncrono — firmar ahí no llega, pero un
+ * send sobre un socket ya abierto suele alcanzar a salir. Best-effort total.
+ */
+export function publishToWriteSync(event: Event): void {
+  try {
+    for (const p of getPool().publish([...RELAYS.write], event)) p.catch(() => {});
+  } catch {
+    // Best-effort: si el pool no está listo, no rompemos el cierre.
+  }
+}
+
 export interface NostrProfile {
   name: string | null;
   /** Dirección Lightning (lud16) para zaps, si el perfil la declara. */

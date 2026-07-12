@@ -90,18 +90,18 @@ function ensurePresence(): PresenceController | null {
   return presence;
 }
 
-// Al CERRAR la pestaña/ventana (o navegar afuera) con una partida abierta, intentar
-// limpiar la presencia NIP-38. Antes `stop()` solo se llamaba al volver al home o
-// hacer logout, así que cerrar el juego dejaba la presencia colgada hasta que vencía
-// su TTL (240s): en la tienda seguías apareciendo "Jugando Ajedrez". `pagehide` es la
-// señal correcta de teardown (a diferencia de `visibilitychange`, no dispara al
-// alt-tabear). Best-effort: el navegador no espera trabajo async en el cierre, pero
-// con signer local/NIP-07 la firma es rápida y el clear suele alcanzar a publicarse
-// sobre el websocket ya abierto; si no llega (p. ej. NIP-46 remoto), el TTL la baja.
+// Al CERRAR la pestaña/ventana (o navegar afuera) con una partida abierta, limpiar
+// la presencia NIP-38. Antes `stop()` solo se llamaba al volver al home o hacer
+// logout, así que cerrar el juego dejaba la presencia colgada hasta que vencía su TTL
+// (240s): en la tienda seguías apareciendo "Jugando Ajedrez". `pagehide` es la señal
+// correcta de teardown (a diferencia de `visibilitychange`, no dispara al alt-tabear).
+// Usamos `clearNow()` (SÍNCRONO, con el clear pre-firmado): firmar en el unload no
+// llega con NIP-07/46, pero un `ws.send` sincrónico sobre el socket ya abierto suele
+// salir. Si aun así no llega, el TTL + la reconciliación de Luna la bajan sin parpadeo.
 // `event.persisted` = va al bfcache y puede restaurarse → no la limpiamos.
 window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
-  void presence?.stop();
+  presence?.clearNow();
 });
 
 const app = document.getElementById("app")!;
