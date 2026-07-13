@@ -128,6 +128,12 @@ window.addEventListener("pagehide", (event) => {
 const app = document.getElementById("app")!;
 const net = new Net(WS_URL);
 
+// Si la foto remota ya no existe, quitamos el icono roto y quedan las iniciales.
+document.addEventListener("error", (event) => {
+  const image = event.target;
+  if (image instanceof HTMLImageElement && image.matches("[data-avatar-image]")) image.remove();
+}, true);
+
 interface State {
   identity: SessionIdentity | null;
   room: RoomView | null;
@@ -829,10 +835,12 @@ function visibleName(player: { displayName: string; pubkey?: string }): string {
 }
 
 function avatarHtml(name: string, picture: string | null, extraClass = ""): string {
-  const safePicture = picture && /^https?:\/\//i.test(picture) ? escapeHtml(picture) : null;
+  const safePicture = picture && /^https?:\/\//i.test(picture)
+    ? `/api/profile-image?url=${encodeURIComponent(picture)}`
+    : null;
   const classes = `avatar${extraClass ? ` ${extraClass}` : ""}`;
   return safePicture
-    ? `<span class="${classes}"><img src="${safePicture}" alt="" referrerpolicy="no-referrer" /></span>`
+    ? `<span class="${classes}"><span class="avatar-fallback">${escapeHtml(initials(name))}</span><img data-avatar-image src="${escapeHtml(safePicture)}" alt="" /></span>`
     : `<span class="${classes}">${escapeHtml(initials(name))}</span>`;
 }
 

@@ -33,7 +33,11 @@ function injectBuildId() {
 
 export default defineConfig({
   plugins: [injectBuildId()],
-  server: { port: 5173, headers: isolation },
+  server: {
+    port: 5173,
+    headers: isolation,
+    proxy: { "/api": "http://localhost:8787" },
+  },
   preview: { port: 4173, headers: isolation },
   build: { target: "es2022" },
 });

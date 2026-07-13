@@ -117,8 +117,10 @@ input[readonly] { color: var(--muted); font-family: var(--mono); font-size: 12px
   display: grid; place-items: center;
   font-weight: 600; font-size: 13px;
   overflow: hidden;
+  position: relative;
 }
-.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-fallback { display: grid; place-items: center; position: absolute; inset: 0; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; position: absolute; inset: 0; }
 .avatar.me-avatar { border-color: var(--gold); }
 
 /* ---------------------------------------------------------- cards / layout */

@@ -24,6 +24,7 @@ import type { NgeBet } from "nostr-game-protocol/nge";
 import type { Event } from "nostr-tools/pure";
 import type { BetView, ClientMessage, RoomView, ServerMessage, SessionIdentity } from "./protocol.js";
 import type { Color, MovePayload, Npub } from "./types.js";
+import { profileImageProxy } from "./imageProxy.js";
 
 /** Apuesta activa por sala (el escrow NGE la custodia server-side). */
 interface BetRecord {
@@ -67,6 +68,8 @@ app.get("/version", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ buildId: config.buildId });
 });
+
+app.get("/api/profile-image", (req, res) => void profileImageProxy(req, res));
 
 // Sirve el build del web (deploy unificado: HTTP + WS en el mismo puerto). En dev
 // se corre Vite aparte (:5173) y este bloque simplemente no encuentra `web/dist`.
