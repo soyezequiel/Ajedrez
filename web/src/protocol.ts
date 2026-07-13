@@ -81,6 +81,37 @@ export interface RoomView {
   players: RoomPlayer[];
 }
 
+export type AchievementId =
+  | "first_game"
+  | "first_win"
+  | "checkmate_win"
+  | "win_streak_3"
+  | "win_streak_5"
+  | "rivalry_3";
+
+export interface RivalMastery {
+  npub: string;
+  pubkey?: string;
+  displayName: string;
+  lastPlayedAt: number;
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+}
+
+export interface PlayerMastery {
+  rating: number;
+  games: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  winStreak: number;
+  bestWinStreak: number;
+  achievements: AchievementId[];
+  recentRivals: RivalMastery[];
+}
+
 export type ClientMessage =
   | { t: "auth"; token: string }
   | { t: "auth_challenge" }
@@ -90,7 +121,7 @@ export type ClientMessage =
   | { t: "join_room"; roomId?: string; code?: string }
   | { t: "enter_room"; roomId: string }
   | { t: "ready" }
-  | { t: "move"; move: MovePayload }
+  | { t: "move"; requestId: string; move: MovePayload }
   | { t: "resign" }
   | { t: "offer_draw" }
   | { t: "accept_draw" }
@@ -114,6 +145,9 @@ export type ServerMessage =
   | { t: "left_room" }
   | { t: "room_closed"; reason: string }
   | { t: "match"; snapshot: MatchSnapshot }
+  | { t: "move_ack"; requestId: string }
+  | { t: "move_rejected"; requestId: string; code: string; message: string }
+  | { t: "mastery"; stats: PlayerMastery; newlyEarned: AchievementId[] }
   /** Oferta de tablas pendiente; `null` = fue rechazada/retirada. */
   | { t: "draw_offer"; byNpub: string | null }
   /** Un jugador pidió revancha (se acepta mandando el propio `rematch`). */

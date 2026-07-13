@@ -55,8 +55,8 @@ export class Net {
   joinRoom(opts: { roomId?: string; code?: string }) { this.send({ t: "join_room", ...opts }); }
   enterRoom(roomId: string) { this.send({ t: "enter_room", roomId }); }
   ready() { this.send({ t: "ready" }); }
-  move(from: string, to: string, promotion?: "q" | "r" | "b" | "n") {
-    this.send({ t: "move", move: { from, to, promotion } });
+  move(requestId: string, from: string, to: string, promotion?: "q" | "r" | "b" | "n") {
+    this.send({ t: "move", requestId, move: { from, to, promotion } });
   }
   resign() { this.send({ t: "resign" }); }
   rematch() { this.send({ t: "rematch" }); }

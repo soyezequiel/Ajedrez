@@ -1,7 +1,8 @@
 import "./styles.css";
 import { WS_URL } from "./config.js";
 import { Net } from "./net.js";
-import { createBoard, type BoardController, type BoardKind, type MoveFn } from "./board.js";
+import { createBoard, type BoardController, type BoardKind, type LegalTargets, type MoveFn } from "./board.js";
+import { Chess, type Square } from "chess.js";
 import {
   clearActiveSigner,
   createNip07Signer,
@@ -36,16 +37,27 @@ import { createZapInvoice } from "./nostr/zap.js";
 // MODO DE PRUEBA (panel diag `?ngptest=1`) — remover con nostr/diag.ts.
 import { isNgpTestMode, mountDiagPanel } from "./nostr/diag.js";
 import { startVersionGuard } from "./version.js";
-import { playSound, setSoundEnabled, soundEnabled, type SoundName } from "./sound.js";
+import { trackUx } from "./metrics.js";
+import {
+  hapticsEnabled,
+  playFeedback,
+  playSound,
+  setHapticsEnabled,
+  setSoundEnabled,
+  soundEnabled,
+  type SoundName,
+} from "./sound.js";
 import type { NgpSigner, ParsedChallenge } from "nostr-game-protocol/ngp";
 import type {
   BetView,
   Color,
   MatchSnapshot,
+  PlayerMastery,
   RatingChange,
   RoomPlayer,
   RoomView,
   SessionIdentity,
+  AchievementId,
 } from "./protocol.js";
 
 const NAME_KEY = "ajedrez.name.v1";
@@ -167,6 +179,8 @@ interface State {
   bet: BetView | null;
   /** Invoice de depósito propio (para pagar con billetera). */
   myBetInvoice: { bolt11: string | null; amountSats: number; stakeSats: number } | null;
+  mastery: PlayerMastery | null;
+  newlyEarned: AchievementId[];
 }
 
 const state: State = {
@@ -183,13 +197,17 @@ const state: State = {
   betsEnabled: false,
   bet: null,
   myBetInvoice: null,
+  mastery: null,
+  newlyEarned: [],
 };
 
 let board: BoardController | null = null;
 let coordinateObserver: ResizeObserver | null = null;
+let pendingMove: { requestId: string; from: string; to: string } | null = null;
+let vexelUnavailable = false;
 
 function boardKind(): BoardKind {
-  return new URLSearchParams(location.search).get("board") === "canvas" ? "canvas" : "vexel";
+  return vexelUnavailable || new URLSearchParams(location.search).get("board") === "canvas" ? "canvas" : "vexel";
 }
 
 // --------------------------------------------------------------- arranque
@@ -222,8 +240,16 @@ function start(): void {
     const soundBtn = target.closest?.("[data-action=sound]") as HTMLButtonElement | null;
     if (soundBtn) {
       setSoundEnabled(!soundEnabled());
-      soundBtn.textContent = soundEnabled() ? "🔊" : "🔇";
+      soundBtn.innerHTML = `${soundEnabled() ? "●" : "○"}<span>Sonido</span>`;
+      soundBtn.setAttribute("aria-label", soundEnabled() ? "Sonido: silenciar" : "Sonido: activar");
       if (soundEnabled()) playSound("move"); // feedback inmediato
+      return;
+    }
+    const hapticsBtn = target.closest?.("[data-action=haptics]") as HTMLButtonElement | null;
+    if (hapticsBtn) {
+      setHapticsEnabled(!hapticsEnabled());
+      hapticsBtn.textContent = hapticsEnabled() ? "Háptica activa" : "Háptica apagada";
+      playFeedback("ui");
       return;
     }
     const btn = target.closest?.("[data-action=logout]") as HTMLButtonElement | null;
@@ -646,7 +672,7 @@ function maybeSendPendingChallenge(room: RoomView): void {
     joinUrl,
     message: `${state.identity?.displayName ?? "Alguien"} te reta a una partida de ajedrez`,
   })
-    .then(() => toast("Reto enviado ♟"))
+    .then(() => { trackUx("challenge_sent"); toast("Reto enviado ♟"); })
     .catch(() => toast("No se pudo enviar el reto"));
 }
 
@@ -700,6 +726,7 @@ function showInvitePopup(invite: { roomId: string; name: string; picture: string
   el.querySelector("#challenge-dismiss")!.addEventListener("click", close);
   el.querySelector("#challenge-accept")!.addEventListener("click", () => {
     close();
+    trackUx("challenge_accepted");
     if (invite.roomId) net.enterRoom(invite.roomId);
   });
 }
@@ -759,12 +786,14 @@ function wireNet(): void {
   });
   net.on("room", (m) => {
     const wasInRoom = state.room !== null;
+    let isRematch = false;
     state.room = m.room;
     writeSavedRoom(m.room.id);
     if (m.room.phase === "lobby") state.ready = false;
     // Revancha concedida: la sala vuelve a "playing" con el resultado viejo en
     // pantalla — limpiar el estado de la partida anterior.
     if (m.room.phase === "playing" && state.ended) {
+      isRematch = true;
       state.ended = null;
       state.myRating = null;
       state.drawOfferBy = null;
@@ -777,16 +806,42 @@ function wireNet(): void {
     void hydrateRoomProfiles(m.room);
     if (!wasInRoom) enterGame();
     else patchGame();
+    if (isRematch) showCountdown();
+    if (isRematch) trackUx("rematch_started");
   });
   net.on("match", (m) => {
+    const isNewMatch = state.match?.matchId !== m.snapshot.matchId && m.snapshot.sanHistory.length === 0;
     const sound = soundForSnapshot(state.match, m.snapshot);
     if (sound) playSound(sound);
+    if (pendingMove) {
+      pendingMove = null;
+    }
     state.match = m.snapshot;
+    if (isNewMatch) trackUx("game_started");
     state.matchReceivedAt = Date.now();
     if (state.room) rememberRoomFriends(state.room, m.snapshot.matchId);
     state.drawOfferBy = null;
     renderBoardFromMatch();
     patchGame();
+  });
+  net.on("move_ack", (m) => {
+    if (pendingMove?.requestId !== m.requestId) return;
+    // El snapshot autoritativo llega inmediatamente después. Conservamos la pieza
+    // optimista en destino hasta entonces para no producir un flash en Vexel.
+  });
+  net.on("move_rejected", (m) => {
+    if (pendingMove?.requestId !== m.requestId) return;
+    pendingMove = null;
+    board?.rejectMove();
+    renderBoardFromMatch();
+    toast(errorText(m.code, m.message), "error");
+    announce(errorText(m.code, m.message));
+  });
+  net.on("mastery", (m) => {
+    state.mastery = m.stats;
+    state.newlyEarned = m.newlyEarned;
+    if (!state.room) renderHome();
+    else patchSidePanels();
   });
   net.on("caps", (m) => {
     state.betsEnabled = m.bets;
@@ -826,7 +881,14 @@ function wireNet(): void {
     state.myRating = m.ratings?.find((r) => r.npub === state.identity?.npub) ?? null;
     state.rematchRequested = false;
     state.rematchOffer = null;
+    trackUx("game_ended", { result: m.result.kind });
     if (board) board.setInteractive(false);
+    const won = m.winnerNpubs.includes(state.identity?.npub ?? "");
+    playFeedback(m.winnerNpubs.length === 0 ? "end" : won ? "win" : "lose");
+    document.body.classList.remove("celebrate-win", "celebrate-loss");
+    document.body.classList.add(won ? "celebrate-win" : "celebrate-loss");
+    setTimeout(() => document.body.classList.remove("celebrate-win", "celebrate-loss"), 1500);
+    announce(state.ended.text);
     publishMyRating();
     patchGame();
   });
@@ -896,8 +958,7 @@ function cleanUrl(): void {
  * reconexión a mitad de partida): solo suena lo que acaba de pasar de verdad.
  */
 function soundForSnapshot(prev: MatchSnapshot | null, next: MatchSnapshot): SoundName | null {
-  if (next.result.kind !== "ongoing")
-    return prev && prev.matchId === next.matchId && prev.result.kind === "ongoing" ? "end" : null;
+  if (next.result.kind !== "ongoing") return null;
   if (!prev || prev.matchId !== next.matchId)
     return next.sanHistory.length === 0 ? "start" : null; // partida nueva vs resync
   if (next.sanHistory.length === prev.sanHistory.length) return null; // sin jugada nueva
@@ -1091,21 +1152,44 @@ function defaultLoginTab(): LoginTab {
 /** Corta el flujo QR (Nostr Connect) en curso al cambiar de solapa o salir. */
 let qrAbort: AbortController | null = null;
 
-function renderLogin(tab: LoginTab = defaultLoginTab()): void {
+function renderLogin(tab?: LoginTab, expanded = false): void {
   clearConnectWatchdog();
   qrAbort?.abort();
   qrAbort = null;
+  const preferred = tab ?? defaultLoginTab();
+  if (!expanded && tab === undefined) {
+    app.innerHTML = shell(`
+      <p class="login-kicker">Club de ajedrez social</p>
+      <p class="muted login-lead">Entrá, elegí un rival y sentí cada jugada.</p>
+      <div class="login-primary stack">
+        <button class="btn-gold btn-hero" id="login-primary">Continuar con Nostr</button>
+        <button class="btn-ghost" id="login-more">Otras formas de entrar</button>
+      </div>
+      <div class="login-trust" aria-label="Beneficios de Nostr">
+        <span>Identidad propia</span><span>Rivales recientes</span><span>ELO persistente</span>
+      </div>`);
+    document.getElementById("login-primary")!.addEventListener("click", () => {
+      playFeedback("ui");
+      trackUx("login_started");
+      if (preferred === "qr") renderLogin("qr", true);
+      else void loginNip07();
+    });
+    document.getElementById("login-more")!.addEventListener("click", () => renderLogin(preferred, true));
+    return;
+  }
   const bar = LOGIN_TABS.map(
-    (t) => `<button class="login-tab${t.id === tab ? " active" : ""}" data-tab="${t.id}">${t.label}</button>`,
+    (t) => `<button class="login-tab${t.id === preferred ? " active" : ""}" data-tab="${t.id}">${t.label}</button>`,
   ).join("");
   app.innerHTML = shell(`
-    <p class="muted">Partidas 1v1 en tiempo real.</p>
+    <p class="muted">Elegí cómo custodiar tu identidad.</p>
     <div class="login-tabs">${bar}</div>
-    <div class="login-panel" id="login-panel"></div>`);
+    <div class="login-panel" id="login-panel"></div>
+    <button class="login-back" id="login-back">← Volver</button>`);
   document.querySelectorAll<HTMLButtonElement>(".login-tab").forEach((b) =>
-    b.addEventListener("click", () => renderLogin(b.dataset.tab as LoginTab)),
+    b.addEventListener("click", () => renderLogin(b.dataset.tab as LoginTab, true)),
   );
-  renderLoginTab(tab);
+  document.getElementById("login-back")!.addEventListener("click", () => renderLogin());
+  renderLoginTab(preferred);
 }
 
 function renderLoginTab(tab: LoginTab): void {
@@ -1207,12 +1291,14 @@ function topbar(): string {
   const id = state.identity;
   const myProfile = profileFor(id?.pubkey);
   const myName = myProfile?.name ?? id?.displayName ?? "";
-  const soundBtn = `<button class="logout" data-action="sound" title="Sonido">${soundEnabled() ? "🔊" : "🔇"}</button>`;
+  const soundBtn = `<button class="icon-btn" data-action="sound" aria-label="${soundEnabled() ? "Sonido: silenciar" : "Sonido: activar"}" title="Sonido">${soundEnabled() ? "●" : "○"}<span>Sonido</span></button>`;
+  const hapticBtn = `<button class="icon-btn haptic-control" data-action="haptics" aria-label="Háptica: alternar respuesta" title="Háptica">${hapticsEnabled() ? "Háptica activa" : "Háptica apagada"}</button>`;
   return `
     <header class="topbar">
-      <span class="brand"><span class="mark">♞</span>Ajedrez</span>
+      <span class="brand"><span class="mark">A</span><span>Ajedrez<small>Club social</small></span></span>
       <span class="spacer"></span>
       ${soundBtn}
+      ${hapticBtn}
       ${id ? `<span class="me">${avatarHtml(myName, myProfile?.picture ?? null)}${escapeHtml(myName)}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
     </header>`;
 }
@@ -1221,32 +1307,31 @@ function topbar(): string {
 
 function renderHome(): void {
   clearConnectWatchdog();
+  document.body.classList.remove("game-active");
   app.innerHTML =
     topbar() +
     `<main class="home">
-      <h1 class="display home-title">Jugá al ajedrez</h1>
-      <p class="muted home-sub">Creá una sala e invitá a tu rival, o entrá con un código.</p>
-      <div class="home-cards">
-        <section class="card action-card">
-          <span class="glyph">♜</span>
-          <h2 class="card-title">Crear sala</h2>
-          <p class="muted">Recibís un link y un código para compartir con tu rival.</p>
-          <button class="btn-gold" id="create">Crear sala</button>
-        </section>
-        <section class="card action-card">
-          <span class="glyph">♟</span>
-          <h2 class="card-title">Unirse por código</h2>
-          <p class="muted">¿Te pasaron un código? Entrá directo a la sala.</p>
-          <div class="row">
-            <input id="code" class="code-field" placeholder="5XRR" maxlength="4" />
+      <section class="home-hero">
+        <p class="home-kicker">Tu mesa está lista</p>
+        <h1 class="display home-title">Una partida más.<br><em>Un rival conocido.</em></h1>
+        <p class="muted home-sub">Creá una mesa privada y empezá a jugar en segundos.</p>
+        ${masteryStatsHtml()}
+        <div class="hero-actions">
+          <button class="btn-gold btn-hero" id="create">Crear mesa</button>
+          <div class="join-inline">
+            <input id="code" class="code-field" aria-label="Código de sala" placeholder="CÓDIGO" maxlength="4" />
             <button id="join">Entrar</button>
           </div>
-        </section>
-        ${challengeCard()}
-      </div>
+        </div>
+      </section>
+      ${state.identity?.guest === false ? `<section class="social-hub">
+        <div class="section-heading"><div><p class="section-label">Tu círculo</p><h2>Rivales y amigos</h2></div><span class="fine">Privado · vía Nostr</span></div>
+        ${friendInviteListHtml()}
+        <details class="npub-invite"><summary>Invitar con npub</summary><div class="row"><input id="challenge-npub" placeholder="npub1…" /><button id="challenge-send">Retar</button></div></details>
+      </section>` : `<section class="guest-callout"><p>Estás jugando como invitado.</p><span>Con Nostr guardás ELO, rachas y rivales recientes.</span></section>`}
     </main>`;
 
-  document.getElementById("create")!.addEventListener("click", () => net.createRoom());
+  document.getElementById("create")!.addEventListener("click", () => { playFeedback("ui"); net.createRoom(); });
   document.getElementById("join")!.addEventListener("click", () => {
     const code = (document.getElementById("code") as HTMLInputElement).value.trim().toUpperCase();
     if (code) net.joinRoom({ code });
@@ -1255,35 +1340,40 @@ function renderHome(): void {
   wireFriendInviteButtons();
 }
 
-/** Tarjeta de reto por npub — solo para login Nostr (los invitados no tienen clave). */
-function challengeCard(): string {
-  if (state.identity?.guest !== false) return "";
-  return `
-    <section class="card action-card">
-      <span class="glyph">♞</span>
-      <h2 class="card-title">Invitar a jugar</h2>
-      <p class="muted">Elegí un contacto de Nostr o pegá su npub. Le llegará una invitación privada.</p>
-      ${friendInviteListHtml()}
-      <div class="row">
-        <input id="challenge-npub" placeholder="npub1…" />
-        <button id="challenge-send">Retar</button>
-      </div>
-    </section>`;
+function masteryStatsHtml(): string {
+  const stats = state.mastery;
+  if (!stats || state.identity?.guest) return "";
+  return `<div class="mastery-strip" aria-label="Tu progreso">
+    <span><strong>${stats.rating}</strong><small>ELO</small></span>
+    <span><strong>${stats.winStreak}</strong><small>Racha</small></span>
+    <span><strong>${stats.wins}</strong><small>Victorias</small></span>
+    <span><strong>${stats.games}</strong><small>Partidas</small></span>
+  </div>`;
 }
 
 function friendInviteListHtml(): string {
   if (friendsLoading && !friends.length) return `<p class="fine">Cargando contactos Nostr…</p>`;
-  if (!friends.length) return `<p class="fine">Tus contactos NIP-02 aparecerán acá.</p>`;
+  const combined = new Map(friends.map((friend) => [friend.pubkey, friend]));
+  for (const rival of state.mastery?.recentRivals ?? []) {
+    if (!rival.pubkey || combined.has(rival.pubkey)) continue;
+    const profile = profileFor(rival.pubkey);
+    combined.set(rival.pubkey, { pubkey: rival.pubkey, name: profile?.name ?? rival.displayName, picture: profile?.picture ?? null });
+  }
+  const social = [...combined.values()];
+  if (!social.length) return `<p class="fine empty-social">Tus contactos y rivales recientes aparecerán acá.</p>`;
   const owner = state.identity?.pubkey ?? "";
   const affinities = affinitiesFor(owner);
-  return `<div class="friend-list">${friends.slice(0, 12).map((friend) => {
+  return `<div class="friend-list">${social.slice(0, 12).map((friend) => {
     const affinity = affinities.get(friend.pubkey);
-    const label = (affinity?.gamesTogether ?? 0) > 0 ? "Ya jugaron juntos" : affinity ? "Ya jugó ajedrez" : "";
+    const rivalry = state.mastery?.recentRivals.find((rival) => rival.pubkey === friend.pubkey);
+    const label = rivalry
+      ? `${rivalry.games} duelo${rivalry.games === 1 ? "" : "s"} · ${rivalry.wins}-${rivalry.losses}`
+      : (affinity?.gamesTogether ?? 0) > 0 ? "Ya jugaron juntos" : affinity ? "Juega ajedrez" : "Contacto Nostr";
     return `
     <div class="friend-row">
       ${avatarHtml(friend.name, friend.picture)}
       <span class="friend-copy"><span class="friend-name">${escapeHtml(friend.name)}</span>${label ? `<small>${label}</small>` : ""}</span>
-      <button type="button" data-invite-pubkey="${friend.pubkey}">Invitar</button>
+      <button type="button" data-invite-pubkey="${friend.pubkey}">Jugar</button>
     </div>`;
   }).join("")}</div>`;
 }
@@ -1306,9 +1396,10 @@ function wireFriendInviteButtons(): void {
 async function inviteFriend(toPubkey: string, button?: HTMLButtonElement): Promise<void> {
   if (!/^[0-9a-f]{64}$/.test(toPubkey) || login?.kind !== "nostr") return;
   if (toPubkey === state.identity?.pubkey) return toast("No podés invitarte a vos mismo");
-  if (!state.room) {
+  if (!state.room || state.room.phase === "finished") {
+    if (state.room?.phase === "finished") trackUx("next_rival_challenged");
     pendingChallenge = { toPubkey };
-    toast("Creando sala…");
+    toast("Preparando una nueva mesa…");
     net.createRoom();
     return;
   }
@@ -1321,6 +1412,7 @@ async function inviteFriend(toPubkey: string, button?: HTMLButtonElement): Promi
       joinUrl: `${location.origin}/?join=${state.room.id}`,
       message: `${state.identity?.displayName ?? "Alguien"} te invita a jugar ajedrez`,
     });
+    trackUx("challenge_sent");
     toast(`Invitación enviada a ${friend?.name ?? "tu contacto"}`);
   } catch {
     toast("No se pudo enviar la invitación");
@@ -1349,12 +1441,15 @@ function sendChallengeFromHome(): void {
 // --------------------------------------------------------------- render: partida
 
 function enterGame(): void {
+  document.body.classList.add("game-active");
   state.ended = null;
   state.myRating = null;
   state.rematchRequested = false;
   state.rematchOffer = null;
   state.bet = null;
   state.myBetInvoice = null;
+  state.newlyEarned = [];
+  pendingMove = null;
   app.innerHTML =
     topbar() +
     `<main class="game">
@@ -1369,17 +1464,55 @@ function enterGame(): void {
     // Peón coronando sin pieza elegida (ni el canvas ni Vexel la eligen): abrir
     // el selector antes de mandar la jugada. El server valida igual.
     if (!promo && isPromotionMove(from, to)) {
-      openPromotionDialog(myColor() ?? "w", (piece) => net.move(from, to, piece));
+      openPromotionDialog(myColor() ?? "w", to, (piece) => submitMove(from, to, piece), () => board?.rejectMove());
       return;
     }
-    net.move(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n"));
+    submitMove(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n"));
   };
   const boardHost = document.getElementById("board-wrap")!;
   const kind = boardKind();
   boardHost.dataset.boardKind = kind;
-  board = createBoard(boardHost, onMove, kind);
+  const feedback = (event: "pickup" | "drop" | "invalid") => playFeedback(event === "drop" ? "move" : event);
+  const useCanvasFallback = (reason: string) => {
+    if (vexelUnavailable || boardHost.dataset.boardKind === "canvas") return;
+    vexelUnavailable = true;
+    console.warn(`[board] Vexel no disponible; activando Canvas: ${reason}`);
+    coordinateObserver?.disconnect();
+    coordinateObserver = null;
+    board?.destroy();
+    boardHost.replaceChildren();
+    boardHost.dataset.boardKind = "canvas";
+    board = createBoard(boardHost, onMove, "canvas", feedback);
+    renderBoardFromMatch();
+    toast("Vexel no pudo iniciar. Activamos el tablero compatible.");
+    announce("Tablero compatible activado. Podés continuar jugando.");
+  };
+  board = createBoard(boardHost, onMove, kind, feedback, useCanvasFallback);
   renderBoardFromMatch();
   patchGame();
+}
+
+function submitMove(from: string, to: string, promotion?: "q" | "r" | "b" | "n"): void {
+  if (pendingMove) return;
+  const requestId = crypto.randomUUID?.() ?? `move_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  pendingMove = { requestId, from, to };
+  net.move(requestId, from, to, promotion);
+}
+
+function showCountdown(): void {
+  document.getElementById("match-countdown")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "match-countdown";
+  overlay.className = "match-countdown";
+  overlay.setAttribute("aria-live", "assertive");
+  document.getElementById("board-wrap")?.appendChild(overlay);
+  board?.setInteractive(false);
+  const beats = ["3", "2", "1", "Jugá"];
+  beats.forEach((beat, index) => setTimeout(() => {
+    overlay.textContent = beat;
+    playSound(index === beats.length - 1 ? "start" : "ui");
+  }, index * 320));
+  setTimeout(() => { overlay.remove(); renderBoardFromMatch(); }, beats.length * 320 + 120);
 }
 
 /** ¿La jugada es un peón llegando a la última fila? (mirando el FEN actual). */
@@ -1410,15 +1543,21 @@ function fenPieceAt(fen: string, square: string): string | null {
 }
 
 /** Modal para elegir la pieza de coronación. Cerrar sin elegir cancela la jugada. */
-function openPromotionDialog(color: Color, choose: (p: "q" | "r" | "b" | "n") => void): void {
+function openPromotionDialog(
+  color: Color,
+  target: string,
+  choose: (p: "q" | "r" | "b" | "n") => void,
+  cancel: () => void,
+): void {
   document.getElementById("promo-modal")?.remove();
   const el = document.createElement("div");
   el.id = "promo-modal";
-  el.className = "modal-overlay";
+  el.className = "promotion-popover";
+  el.dataset.target = target;
   const pieces: Array<["q" | "r" | "b" | "n", string]> = [["q", "Q"], ["r", "R"], ["b", "B"], ["n", "N"]];
   el.innerHTML = `
-    <div class="modal">
-      <h3>Coronar peón</h3>
+    <div class="promotion-panel" role="dialog" aria-label="Elegir pieza para coronar">
+      <span class="promotion-label">Coroná tu peón</span>
       <div class="promo-choices">
         ${pieces
           .map(
@@ -1429,8 +1568,19 @@ function openPromotionDialog(color: Color, choose: (p: "q" | "r" | "b" | "n") =>
       </div>
     </div>`;
   document.body.appendChild(el);
+  const boardBounds = document.getElementById("board-wrap")?.getBoundingClientRect();
+  if (boardBounds) {
+    const file = target.charCodeAt(0) - 97;
+    const rank = 8 - Number(target[1]);
+    const viewFile = color === "w" ? file : 7 - file;
+    const viewRank = color === "w" ? rank : 7 - rank;
+    const x = boardBounds.left + ((viewFile + .5) / 8) * boardBounds.width;
+    const y = boardBounds.top + ((viewRank + .5) / 8) * boardBounds.height;
+    el.style.setProperty("--promo-x", `${Math.max(178, Math.min(innerWidth - 178, x))}px`);
+    el.style.setProperty("--promo-y", `${Math.max(90, Math.min(innerHeight - 90, y))}px`);
+  }
   el.addEventListener("click", (e) => {
-    if (e.target === el) el.remove(); // clic afuera = cancelar
+    if (e.target === el) { el.remove(); cancel(); }
   });
   el.querySelectorAll<HTMLElement>(".promo-btn").forEach((b) =>
     b.addEventListener("click", () => {
@@ -1446,15 +1596,31 @@ function renderBoardFromMatch(): void {
   board.setOrientation(color);
   renderBoardCoordinates(color);
   if (state.match) {
-    board.applyFen(state.match.fen);
+    board.applyFen(state.match.fen, state.match.lastMove);
     const last = state.match.lastMove;
     board.highlight(last ? [last.from, last.to] : []);
+    board.setLegalTargets(legalTargets(state.match.fen, color));
     const myTurn = state.match.turn === color && state.match.result.kind === "ongoing";
-    board.setInteractive(myTurn);
+    board.setInteractive(myTurn && !pendingMove);
   } else {
     board.applyFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1");
+    board.setLegalTargets({});
     board.setInteractive(false);
   }
+}
+
+function legalTargets(fen: string, color: Color): LegalTargets {
+  const chess = new Chess(fen);
+  if (chess.turn() !== color) return {};
+  const targets: LegalTargets = {};
+  for (const file of "abcdefgh") {
+    for (const rank of "12345678") {
+      const from = `${file}${rank}` as Square;
+      const moves = chess.moves({ square: from, verbose: true });
+      if (moves.length) targets[from] = [...new Set(moves.map((move) => move.to))];
+    }
+  }
+  return targets;
 }
 
 function renderBoardCoordinates(color: Color): void {
@@ -1711,7 +1877,7 @@ function playingPanel(): string {
       : offer && offer === me
         ? `<button disabled>Tablas ofrecidas — esperando respuesta…</button>`
         : `<button id="offer-draw">½ Ofrecer tablas</button>`;
-  return `<div class="card">
+  return `<div class="card game-controls">
     ${status}
     <div class="actions" style="margin-top:12px">
       ${drawBtn}
@@ -1751,18 +1917,40 @@ function endedPanel(): string {
     ? `<p class="result-rating">Rating ${r.rating} ` +
       `<span class="delta ${r.delta >= 0 ? "up" : "down"}">${r.delta >= 0 ? "+" : ""}${r.delta}</span></p>`
     : "";
-  return `<div class="card result-card ${cls}" style="position:static;padding:28px">
+  const mastery = state.mastery;
+  const earned = state.newlyEarned.length
+    ? `<div class="achievement-reveal">${state.newlyEarned.map((id) => `<span>✦ ${achievementLabel(id)}</span>`).join("")}</div>`
+    : "";
+  return `<div class="card result-card ${cls}" style="position:static">
+    <div class="result-glow" aria-hidden="true"></div>
     <div class="crown">${crown}</div>
     <p class="result-title">${e.text}</p>
     <p class="result-sub">${e.sub}</p>
     ${ratingLine}
-    <div class="actions" style="margin-top:22px">
+    ${mastery ? `<div class="result-mastery"><span><strong>${mastery.rating}</strong> ELO</span><span><strong>${mastery.winStreak}</strong> racha</span><span><strong>${mastery.games}</strong> partidas</span></div>` : ""}
+    ${earned}
+    <div class="actions result-primary-actions">
       ${rematchButton()}
-      <button id="home">Volver al inicio</button>
-      ${login?.kind === "nostr" ? `<button id="share-achievement">Compartir logro ♟</button>` : ""}
+      ${login?.kind === "nostr" ? `<details class="next-rival"><summary>Retar a otro</summary>${friendInviteListHtml()}</details>` : ""}
+    </div>
+    <div class="result-secondary-actions">
+      <button id="home">Ir al club</button>
+      ${login?.kind === "nostr" ? `<button id="share-achievement">Compartir</button>` : ""}
       ${zapRivalButton()}
     </div>
   </div>`;
+}
+
+function achievementLabel(id: AchievementId): string {
+  const labels: Record<AchievementId, string> = {
+    first_game: "Primera partida",
+    first_win: "Primera victoria",
+    checkmate_win: "Victoria por mate",
+    win_streak_3: "Racha de 3",
+    win_streak_5: "Racha de 5",
+    rivalry_3: "Rivalidad naciente",
+  };
+  return labels[id];
 }
 
 /** Botón de revancha según el estado del pedido (solo con el rival presente). */
@@ -1834,6 +2022,7 @@ function wireSidePanels(): void {
   on("home", () => { clearSavedRoom(); location.reload(); });
   on("rematch", () => {
     state.rematchRequested = true;
+    trackUx("rematch_requested");
     net.rematch();
     patchSidePanels();
   });
@@ -1988,10 +2177,24 @@ function hideReconnectBanner(): void {
   document.getElementById(RECONNECT_BANNER_ID)?.remove();
 }
 
-function toast(text: string): void {
+function announce(text: string): void {
+  let region = document.getElementById("game-announcer");
+  if (!region) {
+    region = document.createElement("div");
+    region.id = "game-announcer";
+    region.className = "sr-only";
+    region.setAttribute("aria-live", "polite");
+    document.body.appendChild(region);
+  }
+  region.textContent = "";
+  requestAnimationFrame(() => { if (region) region.textContent = text; });
+}
+
+function toast(text: string, tone: "neutral" | "error" | "success" = "neutral"): void {
   const t = document.createElement("div");
-  t.className = "toast";
+  t.className = `toast ${tone}`;
   t.textContent = text;
+  t.setAttribute("role", tone === "error" ? "alert" : "status");
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 2600);
 }

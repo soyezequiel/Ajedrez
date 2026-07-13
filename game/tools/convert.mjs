@@ -14,6 +14,8 @@ async function render(svgPath, pngPath, size) {
 }
 
 await render(join(TEX, "board.svg"), join(TEX, "board.png"), 1024);
+await render(join(TEX, "highlight.svg"), join(TEX, "highlight.png"), 64);
+await render(join(TEX, "select.svg"), join(TEX, "select.png"), 64);
 
 const dir = join(TEX, "pieces");
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".svg"))) {

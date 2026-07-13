@@ -105,6 +105,7 @@ describe("RoomManager — GC de salas (sweep)", () => {
 
     const second = room.startMatch(0);
     expect(second).not.toBe(first);
+    expect(second.matchId).not.toBe(first.matchId);
     expect(second.snapshot().white).toBe(GUEST.npub);
     expect(room.phase).toBe("playing");
   });

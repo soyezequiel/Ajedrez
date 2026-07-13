@@ -15,7 +15,8 @@ import {
   verifyNostrAuth,
   verifySessionToken,
 } from "./nostrAuth.js";
-import { applyResult, type RatingChange } from "./ratings.js";
+import { applyResult, getRating, type RatingChange } from "./ratings.js";
+import { MasteryStore } from "./mastery.js";
 import { BetError, betsEnabled, cancelBet, createBet, settleBet, watchBet } from "./bets.js";
 import { pendingBets, trackBet, untrackBet } from "./betStore.js";
 // MODO DE PRUEBA (panel diag) — remover junto con attest.ts.
@@ -38,6 +39,7 @@ interface BetRecord {
 const betsByRoom = new Map<string, BetRecord>();
 
 const rooms = new RoomManager(config.roomsPath);
+const mastery = new MasteryStore(config.masteryPath);
 
 interface ConnState {
   identity?: SessionIdentity;
@@ -58,9 +60,23 @@ const abandonTimers = new Map<string, Map<Npub, NodeJS.Timeout>>();
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: "4kb" }));
+
+const uxEventCounts = new Map<string, number>();
+const UX_EVENTS = new Set([
+  "login_started", "challenge_sent", "challenge_accepted", "game_started", "game_ended",
+  "rematch_requested", "rematch_started", "next_rival_challenged",
+]);
+
+app.post("/api/ux-event", (req, res) => {
+  const event = typeof req.body?.event === "string" ? req.body.event : "";
+  if (!UX_EVENTS.has(event)) return res.status(400).json({ ok: false });
+  uxEventCounts.set(event, (uxEventCounts.get(event) ?? 0) + 1);
+  res.status(204).end();
+});
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, rooms: rooms.all().length, buildId: config.buildId });
+  res.json({ ok: true, rooms: rooms.all().length, buildId: config.buildId, uxEvents: Object.fromEntries(uxEventCounts) });
 });
 
 // El web sondea esto y, si el buildId difiere del suyo, recarga (ver web/src/version.ts).
@@ -84,7 +100,15 @@ if (existsSync(webDist)) {
   // index:false → el index NO se sirve desde acá; cae al handler de abajo, que le
   // pone no-cache (así un deploy nuevo no queda tapado por caché del borde/Cloudflare).
   // Los assets llevan hash en el nombre (Vite), así que su caché por defecto es segura.
-  app.use(express.static(webDist, { index: false }));
+  app.use(express.static(webDist, {
+    index: false,
+    setHeaders: (res, path) => {
+      // El runtime, WASM y data de Vexel son indivisibles. Obligar a revalidar
+      // evita combinar offsets nuevos con un paquete de texturas cacheado.
+      if (/[\\/]game[\\/](?:ajedrez\.(?:js|wasm|data))$/.test(path))
+        res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    },
+  }));
   // Cualquier ruta no-archivo sirve el index (el shell rutea por query string).
   app.get("*", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache, must-revalidate");
@@ -146,7 +170,7 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
     case "ready":
       return handleReady(ws, state);
     case "move":
-      return handleMove(ws, state, msg.move);
+      return handleMove(ws, state, msg.requestId, msg.move);
     case "resign":
       return handleResign(ws, state);
     case "offer_draw":
@@ -229,6 +253,7 @@ function handleAuthNostr(
   const token = issueSessionToken(pubkey, npub, name);
   send(ws, { t: "authed", identity: state.identity, token });
   send(ws, { t: "caps", bets: betsEnabled() });
+  sendMastery(ws, state.identity);
 }
 
 /**
@@ -245,6 +270,7 @@ function handleAuthToken(ws: WebSocket, state: ConnState, token: string): void {
   const fresh = issueSessionToken(res.pubkey, res.npub, name);
   send(ws, { t: "authed", identity: state.identity, token: fresh });
   send(ws, { t: "caps", bets: betsEnabled() });
+  sendMastery(ws, state.identity);
 }
 
 /** Display name best-effort del perfil: no es sensible (la firma es la auth),
@@ -350,17 +376,27 @@ function scheduleClock(room: Room): void {
   clockTimers.set(room.id, timer);
 }
 
-function handleMove(ws: WebSocket, state: ConnState, move: MovePayload): void {
-  const room = currentRoom(state);
-  if (!room.match) return send(ws, { t: "error", code: "NO_MATCH", message: "No hay partida" });
-  room.touch();
-  const snapshot = room.match.move(identity(state).npub, move);
-  // Una jugada invalida la oferta de tablas pendiente (si no, un F5 posterior
-  // la resucitaba en el resync).
-  room.drawOfferBy = null;
-  broadcast(room, { t: "match", snapshot });
-  if (room.match.isOver) finishMatch(room);
-  else scheduleClock(room);
+function handleMove(ws: WebSocket, state: ConnState, requestId: string, move: MovePayload): void {
+  try {
+    const room = currentRoom(state);
+    if (!room.match) {
+      send(ws, { t: "move_rejected", requestId, code: "NO_MATCH", message: "No hay partida" });
+      return;
+    }
+    room.touch();
+    const snapshot = room.match.move(identity(state).npub, move);
+    room.drawOfferBy = null;
+    send(ws, { t: "move_ack", requestId });
+    broadcast(room, { t: "match", snapshot });
+    if (room.match.isOver) finishMatch(room);
+    else scheduleClock(room);
+  } catch (error) {
+    if (error instanceof MatchError || error instanceof RoomError) {
+      send(ws, { t: "move_rejected", requestId, code: error.code, message: error.message });
+      return;
+    }
+    throw error;
+  }
 }
 
 function handleResign(ws: WebSocket, state: ConnState): void {
@@ -609,12 +645,27 @@ function finishMatch(room: Room): void {
   // que nunca podía cerrar (settled sigue true).
   readyByRoom.delete(room.id);
   const winners = room.match.winnerNpubs();
+  const ratings = rateMatch(room, winners);
   broadcast(room, {
     t: "ended",
     result: room.match.getResult(),
     winnerNpubs: winners,
-    ratings: rateMatch(room, winners),
+    ratings,
   });
+  const updates = mastery.recordMatch({
+    matchId: room.match.matchId,
+    players: room.roster,
+    result: room.match.getResult(),
+    winners,
+    ratings,
+  });
+  for (const player of room.roster) {
+    if (!player.pubkey) continue;
+    const update = updates.get(player.npub);
+    if (!update) continue;
+    for (const socket of socketsOf(room.id, player.npub))
+      send(socket, { t: "mastery", ...update });
+  }
   settleRoomBet(room, winners);
 }
 
@@ -720,6 +771,15 @@ function roomView(room: Room): RoomView {
 function broadcastRoom(room: Room): void {
   rooms.persist();
   broadcast(room, { t: "room", room: roomView(room) });
+}
+
+function sendMastery(ws: WebSocket, player: SessionIdentity): void {
+  if (player.guest) return;
+  send(ws, {
+    t: "mastery",
+    stats: mastery.get(player.npub, getRating(player.npub)),
+    newlyEarned: [],
+  });
 }
 
 function handleLeaveRoom(ws: WebSocket, state: ConnState): void {

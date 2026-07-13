@@ -5,12 +5,25 @@
  * autoplay de los navegadores) y el mute persiste en localStorage.
  */
 
-export type SoundName = "move" | "capture" | "check" | "start" | "end";
+export type SoundName =
+  | "pickup"
+  | "move"
+  | "capture"
+  | "check"
+  | "invalid"
+  | "ui"
+  | "invite"
+  | "start"
+  | "win"
+  | "lose"
+  | "end";
 
 const SOUND_KEY = "ajedrez.sound.v1";
+const HAPTICS_KEY = "ajedrez.haptics.v1";
 
 let ctx: AudioContext | null = null;
 let enabled = readEnabled();
+let haptics = readHaptics();
 
 function readEnabled(): boolean {
   try {
@@ -18,6 +31,11 @@ function readEnabled(): boolean {
   } catch {
     return true;
   }
+}
+
+function readHaptics(): boolean {
+  try { return localStorage.getItem(HAPTICS_KEY) !== "off"; }
+  catch { return true; }
 }
 
 export function soundEnabled(): boolean {
@@ -31,6 +49,14 @@ export function setSoundEnabled(on: boolean): void {
   } catch {
     /* storage bloqueado */
   }
+}
+
+export function hapticsEnabled(): boolean { return haptics; }
+
+export function setHapticsEnabled(on: boolean): void {
+  haptics = on;
+  try { localStorage.setItem(HAPTICS_KEY, on ? "on" : "off"); }
+  catch { /* storage bloqueado */ }
 }
 
 /** Crea/reanuda el contexto. Solo prospera tras un gesto del usuario. */
@@ -83,6 +109,10 @@ function play(notes: Note[]): void {
 }
 
 const SOUNDS: Record<SoundName, Note[]> = {
+  pickup: [
+    { f: 420, at: 0, d: 0.045, type: "triangle", v: 0.08 },
+    { f: 160, at: 0, d: 0.055, type: "sine", v: 0.055 },
+  ],
   // Golpecito seco de pieza sobre el tablero.
   move: [{ f: 260, at: 0, d: 0.09, type: "triangle", v: 0.22 }],
   // Captura: golpe más grave con un armónico corto.
@@ -94,6 +124,15 @@ const SOUNDS: Record<SoundName, Note[]> = {
   check: [
     { f: 540, at: 0, d: 0.1, v: 0.14 },
     { f: 720, at: 0.11, d: 0.16, v: 0.14 },
+  ],
+  invalid: [
+    { f: 150, at: 0, d: 0.08, type: "square", v: 0.08 },
+    { f: 118, at: 0.07, d: 0.1, type: "triangle", v: 0.1 },
+  ],
+  ui: [{ f: 460, at: 0, d: 0.055, type: "sine", v: 0.07 }],
+  invite: [
+    { f: 494, at: 0, d: 0.1, v: 0.08 },
+    { f: 659, at: 0.08, d: 0.18, v: 0.09 },
   ],
   // Inicio: arpegio breve y amable.
   start: [
@@ -107,8 +146,36 @@ const SOUNDS: Record<SoundName, Note[]> = {
     { f: 494, at: 0.13, d: 0.16, v: 0.13 },
     { f: 392, at: 0.26, d: 0.3, v: 0.13 },
   ],
+  win: [
+    { f: 392, at: 0, d: 0.18, type: "triangle", v: 0.12 },
+    { f: 494, at: 0.1, d: 0.22, type: "triangle", v: 0.12 },
+    { f: 587, at: 0.2, d: 0.26, type: "triangle", v: 0.13 },
+    { f: 784, at: 0.32, d: 0.48, type: "sine", v: 0.11 },
+  ],
+  lose: [
+    { f: 294, at: 0, d: 0.2, type: "triangle", v: 0.1 },
+    { f: 247, at: 0.14, d: 0.26, type: "triangle", v: 0.09 },
+    { f: 196, at: 0.3, d: 0.4, type: "sine", v: 0.08 },
+  ],
 };
 
 export function playSound(name: SoundName): void {
   play(SOUNDS[name]);
+}
+
+const VIBRATIONS: Partial<Record<SoundName, number | number[]>> = {
+  pickup: 7,
+  move: 10,
+  capture: [12, 18, 20],
+  check: [18, 35, 18],
+  invalid: [18, 35, 18],
+  invite: [10, 35, 12],
+  win: [15, 35, 20, 45, 28],
+};
+
+export function playFeedback(name: SoundName): void {
+  playSound(name);
+  const pattern = VIBRATIONS[name];
+  if (!haptics || pattern === undefined || !("vibrate" in navigator)) return;
+  try { navigator.vibrate(pattern); } catch { /* no soportado */ }
 }

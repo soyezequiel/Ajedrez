@@ -34,6 +34,7 @@ interface PersistedRoom {
   lastActivityAt: number;
   drawOfferBy: Npub | null;
   rematchBy: Npub[];
+  matchSerial?: number;
 }
 
 /** Una sala = un emparejamiento 1v1 de ajedrez. */
@@ -60,6 +61,8 @@ export class Room {
   drawOfferBy: Npub | null = null;
   /** Npubs que pidieron revancha tras `finished`. Con ambos, la sala se reinicia. */
   readonly rematchBy = new Set<Npub>();
+  /** Secuencia durable para que cada revancha tenga un matchId realmente único. */
+  private matchSerial = 0;
 
   constructor(host: PlayerInit, id?: string, persisted?: PersistedRoom) {
     // `id` externo = sala de un link `?join=<id>` (invite propio o Room Link de la
@@ -68,6 +71,7 @@ export class Room {
     this.code = persisted?.code ?? this.id;
     this.hostNpub = persisted?.hostNpub ?? host.npub;
     if (persisted) {
+      this.matchSerial = persisted.matchSerial ?? (persisted.match ? 1 : 0);
       this.phase = persisted.phase;
       this.settled = persisted.settled;
       this.lastActivityAt = persisted.lastActivityAt;
@@ -78,7 +82,7 @@ export class Room {
       const black = this.black;
       if (persisted.match && white && black) {
         this.match = new ChessMatch({
-          matchId: `match_${this.id}`,
+          matchId: `match_${this.id}_${Math.max(1, this.matchSerial)}`,
           white: white.npub,
           black: black.npub,
           clockMs: config.defaultClockMs,
@@ -107,6 +111,7 @@ export class Room {
       lastActivityAt: this.lastActivityAt,
       drawOfferBy: this.drawOfferBy,
       rematchBy: [...this.rematchBy],
+      matchSerial: this.matchSerial,
     };
   }
 
@@ -178,8 +183,9 @@ export class Room {
     const black = this.black;
     if (!white || !black)
       throw new RoomError("NOT_READY", "Faltan jugadores para empezar");
+    this.matchSerial += 1;
     this.match = new ChessMatch({
-      matchId: `match_${this.id}`,
+      matchId: `match_${this.id}_${this.matchSerial}`,
       white: white.npub,
       black: black.npub,
       clockMs: config.defaultClockMs,

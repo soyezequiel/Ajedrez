@@ -11,14 +11,17 @@
     "dev": "npm run sync && vite",
     "build": "npm run sync && tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6",
     "typescript": "^5.6.2",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
+    "chess.js": "^1.4.0",
     "nostr-game-protocol": "github:soyezequiel/Nostr-Game-Protocol",
     "nostr-tools": "^2.23.9",
     "qrcode": "^1.5.4"

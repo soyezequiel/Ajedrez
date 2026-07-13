@@ -206,140 +206,174 @@ Module["expectedDataFileDownloads"]++;
     }
   }
   loadPackage({
-    "files": [ {
-      "filename": "/shaders/sprite-fragment.glsl",
-      "start": 0,
-      "end": 132
-    }, {
-      "filename": "/shaders/sprite-fragment.wgsl",
-      "start": 132,
-      "end": 278
-    }, {
-      "filename": "/shaders/sprite-vertex.glsl",
-      "start": 278,
-      "end": 483
-    }, {
-      "filename": "/shaders/sprite-vertex.wgsl",
-      "start": 483,
-      "end": 797
-    }, {
-      "filename": "/textures/README.md",
-      "start": 797,
-      "end": 1839
-    }, {
-      "filename": "/textures/board.png",
-      "start": 1839,
-      "end": 21134
-    }, {
-      "filename": "/textures/board.svg",
-      "start": 21134,
-      "end": 25084
-    }, {
-      "filename": "/textures/highlight.png",
-      "start": 25084,
-      "end": 25293
-    }, {
-      "filename": "/textures/pieces/bB.png",
-      "start": 25293,
-      "end": 29778
-    }, {
-      "filename": "/textures/pieces/bB.svg",
-      "start": 29778,
-      "end": 30100
-    }, {
-      "filename": "/textures/pieces/bK.png",
-      "start": 30100,
-      "end": 35879
-    }, {
-      "filename": "/textures/pieces/bK.svg",
-      "start": 35879,
-      "end": 36201
-    }, {
-      "filename": "/textures/pieces/bN.png",
-      "start": 36201,
-      "end": 42524
-    }, {
-      "filename": "/textures/pieces/bN.svg",
-      "start": 42524,
-      "end": 42846
-    }, {
-      "filename": "/textures/pieces/bP.png",
-      "start": 42846,
-      "end": 47096
-    }, {
-      "filename": "/textures/pieces/bP.svg",
-      "start": 47096,
-      "end": 47418
-    }, {
-      "filename": "/textures/pieces/bQ.png",
-      "start": 47418,
-      "end": 54764
-    }, {
-      "filename": "/textures/pieces/bQ.svg",
-      "start": 54764,
-      "end": 55086
-    }, {
-      "filename": "/textures/pieces/bR.png",
-      "start": 55086,
-      "end": 57707
-    }, {
-      "filename": "/textures/pieces/bR.svg",
-      "start": 57707,
-      "end": 58029
-    }, {
-      "filename": "/textures/pieces/wB.png",
-      "start": 58029,
-      "end": 63136
-    }, {
-      "filename": "/textures/pieces/wB.svg",
-      "start": 63136,
-      "end": 63458
-    }, {
-      "filename": "/textures/pieces/wK.png",
-      "start": 63458,
-      "end": 70201
-    }, {
-      "filename": "/textures/pieces/wK.svg",
-      "start": 70201,
-      "end": 70523
-    }, {
-      "filename": "/textures/pieces/wN.png",
-      "start": 70523,
-      "end": 77909
-    }, {
-      "filename": "/textures/pieces/wN.svg",
-      "start": 77909,
-      "end": 78231
-    }, {
-      "filename": "/textures/pieces/wP.png",
-      "start": 78231,
-      "end": 83083
-    }, {
-      "filename": "/textures/pieces/wP.svg",
-      "start": 83083,
-      "end": 83405
-    }, {
-      "filename": "/textures/pieces/wQ.png",
-      "start": 83405,
-      "end": 91791
-    }, {
-      "filename": "/textures/pieces/wQ.svg",
-      "start": 91791,
-      "end": 92113
-    }, {
-      "filename": "/textures/pieces/wR.png",
-      "start": 92113,
-      "end": 94934
-    }, {
-      "filename": "/textures/pieces/wR.svg",
-      "start": 94934,
-      "end": 95256
-    }, {
-      "filename": "/textures/select.png",
-      "start": 95256,
-      "end": 95465
-    } ],
-    "remote_package_size": 95465
+    "files": [
+      {
+        "filename": "/shaders/sprite-fragment.glsl",
+        "start": 0,
+        "end": 132
+      },
+      {
+        "filename": "/shaders/sprite-fragment.wgsl",
+        "start": 132,
+        "end": 278
+      },
+      {
+        "filename": "/shaders/sprite-vertex.glsl",
+        "start": 278,
+        "end": 483
+      },
+      {
+        "filename": "/shaders/sprite-vertex.wgsl",
+        "start": 483,
+        "end": 797
+      },
+      {
+        "filename": "/textures/README.md",
+        "start": 797,
+        "end": 1601
+      },
+      {
+        "filename": "/textures/board.png",
+        "start": 1601,
+        "end": 86079
+      },
+      {
+        "filename": "/textures/board.svg",
+        "start": 86079,
+        "end": 90333
+      },
+      {
+        "filename": "/textures/highlight.png",
+        "start": 90333,
+        "end": 90730
+      },
+      {
+        "filename": "/textures/pieces/bB.png",
+        "start": 90730,
+        "end": 97892
+      },
+      {
+        "filename": "/textures/pieces/bB.svg",
+        "start": 97892,
+        "end": 98421
+      },
+      {
+        "filename": "/textures/pieces/bK.png",
+        "start": 98421,
+        "end": 104177
+      },
+      {
+        "filename": "/textures/pieces/bK.svg",
+        "start": 104177,
+        "end": 104684
+      },
+      {
+        "filename": "/textures/pieces/bN.png",
+        "start": 104684,
+        "end": 111401
+      },
+      {
+        "filename": "/textures/pieces/bN.svg",
+        "start": 111401,
+        "end": 111940
+      },
+      {
+        "filename": "/textures/pieces/bP.png",
+        "start": 111940,
+        "end": 118076
+      },
+      {
+        "filename": "/textures/pieces/bP.svg",
+        "start": 118076,
+        "end": 118578
+      },
+      {
+        "filename": "/textures/pieces/bQ.png",
+        "start": 118578,
+        "end": 126150
+      },
+      {
+        "filename": "/textures/pieces/bQ.svg",
+        "start": 126150,
+        "end": 126720
+      },
+      {
+        "filename": "/textures/pieces/bR.png",
+        "start": 126720,
+        "end": 132751
+      },
+      {
+        "filename": "/textures/pieces/bR.svg",
+        "start": 132751,
+        "end": 133268
+      },
+      {
+        "filename": "/textures/pieces/wB.png",
+        "start": 133268,
+        "end": 140633
+      },
+      {
+        "filename": "/textures/pieces/wB.svg",
+        "start": 140633,
+        "end": 141162
+      },
+      {
+        "filename": "/textures/pieces/wK.png",
+        "start": 141162,
+        "end": 146969
+      },
+      {
+        "filename": "/textures/pieces/wK.svg",
+        "start": 146969,
+        "end": 147476
+      },
+      {
+        "filename": "/textures/pieces/wN.png",
+        "start": 147476,
+        "end": 154613
+      },
+      {
+        "filename": "/textures/pieces/wN.svg",
+        "start": 154613,
+        "end": 155152
+      },
+      {
+        "filename": "/textures/pieces/wP.png",
+        "start": 155152,
+        "end": 161448
+      },
+      {
+        "filename": "/textures/pieces/wP.svg",
+        "start": 161448,
+        "end": 161950
+      },
+      {
+        "filename": "/textures/pieces/wQ.png",
+        "start": 161950,
+        "end": 169505
+      },
+      {
+        "filename": "/textures/pieces/wQ.svg",
+        "start": 169505,
+        "end": 170075
+      },
+      {
+        "filename": "/textures/pieces/wR.png",
+        "start": 170075,
+        "end": 175879
+      },
+      {
+        "filename": "/textures/pieces/wR.svg",
+        "start": 175879,
+        "end": 176396
+      },
+      {
+        "filename": "/textures/select.png",
+        "start": 176396,
+        "end": 176814
+      }
+    ],
+    "remote_package_size": 176814
   });
 })();
 

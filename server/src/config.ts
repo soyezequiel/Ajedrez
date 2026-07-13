@@ -27,6 +27,9 @@ export const config = {
    *  que sobreviva a redeploys (ver deploy/). */
   ratingsPath: process.env.RATINGS_PATH ?? join(here, "..", "data", "ratings.json"),
 
+  /** Progreso social, rachas, rivales recientes y logros. */
+  masteryPath: process.env.MASTERY_PATH ?? join(here, "..", "data", "mastery.json"),
+
   /** Salas y partidas activas. Debe apuntar al volumen persistente en deploy. */
   roomsPath: process.env.ROOMS_PATH ?? join(here, "..", "data", "rooms.json"),
 
