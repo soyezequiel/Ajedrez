@@ -444,6 +444,7 @@ export class VexelBoard extends InteractiveBoard {
       },
       onRuntimeInitialized: () => {
         clearTimeout(this.startupTimer);
+        console.info("[chess-board] renderer=vexel");
         // Emscripten fija el tamaño CSS del canvas a 600 px con !important.
         // El backing store permanece a 600², pero visualmente debe seguir al
         // contenedor para no recortarse en móvil.
@@ -680,6 +681,7 @@ export function createBoard(
     const canvas = document.createElement("canvas");
     canvas.id = "board";
     container.appendChild(canvas);
+    console.info("[chess-board] renderer=canvas");
     return new CanvasBoard(canvas, onMove, onFeedback);
   }
   return new VexelBoard(container, onMove, onFeedback, onUnavailable);

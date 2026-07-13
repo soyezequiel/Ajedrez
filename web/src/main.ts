@@ -1476,7 +1476,7 @@ function enterGame(): void {
   const useCanvasFallback = (reason: string) => {
     if (vexelUnavailable || boardHost.dataset.boardKind === "canvas") return;
     vexelUnavailable = true;
-    console.warn(`[board] Vexel no disponible; activando Canvas: ${reason}`);
+    console.warn(`[chess-board] Vexel no disponible; activando Canvas: ${reason}`);
     coordinateObserver?.disconnect();
     coordinateObserver = null;
     board?.destroy();
