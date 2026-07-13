@@ -5,6 +5,7 @@
   "description": "Ajedrez 1v1: server autoritativo (chess.js + WebSocket) que sirve el shell web con tablero Vexel",
   "scripts": {
     "install:all": "npm --prefix server install && npm --prefix web install",
+    "update:ngp": "npm --prefix server update nostr-game-protocol && npm --prefix web update nostr-game-protocol",
     "build": "npm --prefix web run build",
     "start": "npm --prefix web run build && npm --prefix server run start",
     "serve": "npm --prefix server run start",
