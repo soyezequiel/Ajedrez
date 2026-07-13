@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { RoomError, RoomManager } from "./rooms.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const HOST = { npub: "u_ana", displayName: "Ana" };
 const GUEST = { npub: "u_beto", displayName: "Beto" };
@@ -7,6 +10,30 @@ const GUEST = { npub: "u_beto", displayName: "Beto" };
 const TTL = { finishedTtlMs: 10_000, emptyTtlMs: 30_000 };
 
 describe("RoomManager — GC de salas (sweep)", () => {
+  it("genera ids y links de sala de 4 caracteres", () => {
+    const room = new RoomManager().create(HOST);
+    expect(room.id).toMatch(/^[A-Z2-9]{4}$/);
+    expect(room.code).toBe(room.id);
+  });
+
+  it("restaura sala y partida completa desde disco", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ajedrez-rooms-"));
+    const path = join(dir, "rooms.json");
+    try {
+      const first = new RoomManager(path);
+      const room = first.create(HOST);
+      room.join(GUEST);
+      room.startMatch(1_000).move(HOST.npub, { from: "e2", to: "e4" }, 2_000);
+      first.persist();
+
+      const restored = new RoomManager(path).get(room.id)!;
+      expect(restored.roster).toHaveLength(2);
+      expect(restored.match?.snapshot().sanHistory).toEqual(["e4"]);
+      expect(restored.match?.snapshot().fen).toBe(room.match?.snapshot().fen);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("purga una sala terminada pasado su TTL y libera id y código", () => {
     const rooms = new RoomManager();
     const room = rooms.create(HOST);

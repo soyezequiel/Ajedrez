@@ -27,6 +27,9 @@ export const config = {
    *  que sobreviva a redeploys (ver deploy/). */
   ratingsPath: process.env.RATINGS_PATH ?? join(here, "..", "data", "ratings.json"),
 
+  /** Salas y partidas activas. Debe apuntar al volumen persistente en deploy. */
+  roomsPath: process.env.ROOMS_PATH ?? join(here, "..", "data", "rooms.json"),
+
   /** Reloj por defecto de una partida (ms por jugador). 5 min + sin incremento. */
   defaultClockMs: Number(process.env.DEFAULT_CLOCK_MS ?? 5 * 60 * 1000),
 
@@ -36,8 +39,8 @@ export const config = {
   /** GC de salas: cada cuánto barrer, y TTL de inactividad según fase. Las salas
    *  viven en RAM; sin esto crecen sin límite en un server de larga vida. */
   roomSweepMs: Number(process.env.ROOM_SWEEP_MS ?? 60 * 1000),
-  finishedRoomTtlMs: Number(process.env.ROOM_TTL_FINISHED_MS ?? 10 * 60 * 1000),
-  emptyRoomTtlMs: Number(process.env.ROOM_TTL_EMPTY_MS ?? 30 * 60 * 1000),
+  finishedRoomTtlMs: Number(process.env.ROOM_TTL_FINISHED_MS ?? 30 * 24 * 60 * 60 * 1000),
+  emptyRoomTtlMs: Number(process.env.ROOM_TTL_EMPTY_MS ?? 30 * 24 * 60 * 60 * 1000),
 
   /** Store de apuestas NGE activas (JSON en disco, mismo volumen que ratings).
    *  Permite reembolsar apuestas huérfanas si el server se reinicia con una viva. */

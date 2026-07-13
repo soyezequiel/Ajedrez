@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { config } from "./config.js";
-import { ChessMatch } from "./chessMatch.js";
+import { ChessMatch, type PersistedMatch } from "./chessMatch.js";
 import type { Npub } from "./types.js";
 
 export type RoomPhase = "lobby" | "playing" | "finished";
@@ -19,6 +21,19 @@ export interface PlayerInit {
   npub: Npub;
   displayName: string;
   pubkey?: string;
+}
+
+interface PersistedRoom {
+  id: string;
+  code: string;
+  hostNpub: Npub;
+  phase: RoomPhase;
+  players: RoomPlayer[];
+  match: PersistedMatch | null;
+  settled: boolean;
+  lastActivityAt: number;
+  drawOfferBy: Npub | null;
+  rematchBy: Npub[];
 }
 
 /** Una sala = un emparejamiento 1v1 de ajedrez. */
@@ -46,18 +61,53 @@ export class Room {
   /** Npubs que pidieron revancha tras `finished`. Con ambos, la sala se reinicia. */
   readonly rematchBy = new Set<Npub>();
 
-  constructor(host: PlayerInit, id?: string) {
+  constructor(host: PlayerInit, id?: string, persisted?: PersistedRoom) {
     // `id` externo = sala de un link `?join=<id>` (invite propio o Room Link de la
     // tienda), creada lazy. Sin id, generamos uno propio ("Crear sala" normal).
-    this.id = id ?? `room_${randomBytes(6).toString("hex")}`;
-    this.code = makeCode();
-    this.hostNpub = host.npub;
+    this.id = persisted?.id ?? id ?? makeCode();
+    this.code = persisted?.code ?? this.id;
+    this.hostNpub = persisted?.hostNpub ?? host.npub;
+    if (persisted) {
+      this.phase = persisted.phase;
+      this.settled = persisted.settled;
+      this.lastActivityAt = persisted.lastActivityAt;
+      this.drawOfferBy = persisted.drawOfferBy;
+      for (const player of persisted.players) this.players.set(player.npub, player);
+      for (const npub of persisted.rematchBy) this.rematchBy.add(npub);
+      const white = this.white;
+      const black = this.black;
+      if (persisted.match && white && black) {
+        this.match = new ChessMatch({
+          matchId: `match_${this.id}`,
+          white: white.npub,
+          black: black.npub,
+          clockMs: config.defaultClockMs,
+          restored: persisted.match,
+        });
+      }
+      return;
+    }
     this.players.set(host.npub, {
       npub: host.npub,
       displayName: host.displayName,
       pubkey: host.pubkey,
       color: "w",
     });
+  }
+
+  serialize(): PersistedRoom {
+    return {
+      id: this.id,
+      code: this.code,
+      hostNpub: this.hostNpub,
+      phase: this.phase,
+      players: this.roster,
+      match: this.match?.serialize() ?? null,
+      settled: this.settled,
+      lastActivityAt: this.lastActivityAt,
+      drawOfferBy: this.drawOfferBy,
+      rematchBy: [...this.rematchBy],
+    };
   }
 
   get roster(): RoomPlayer[] {
@@ -134,10 +184,17 @@ export class RoomManager {
   private readonly byId = new Map<string, Room>();
   private readonly byCode = new Map<string, string>(); // code -> roomId
 
+  constructor(private readonly storagePath?: string) {
+    if (storagePath) this.load();
+  }
+
   create(host: PlayerInit): Room {
-    const room = new Room(host);
+    let code = makeCode();
+    while (this.byId.has(code)) code = makeCode();
+    const room = new Room(host, code);
     this.byId.set(room.id, room);
     this.byCode.set(room.code, room.id);
+    this.persist();
     return room;
   }
 
@@ -157,6 +214,7 @@ export class RoomManager {
     const room = new Room(player, roomId);
     this.byId.set(room.id, room);
     this.byCode.set(room.code, room.id);
+    this.persist();
     return room;
   }
 
@@ -174,6 +232,35 @@ export class RoomManager {
     if (!room) return;
     this.byId.delete(roomId);
     this.byCode.delete(room.code);
+    this.persist();
+  }
+
+  persist(): void {
+    if (!this.storagePath) return;
+    try {
+      mkdirSync(dirname(this.storagePath), { recursive: true });
+      const temp = `${this.storagePath}.tmp`;
+      writeFileSync(temp, JSON.stringify(this.all().map((room) => room.serialize()), null, 2));
+      renameSync(temp, this.storagePath);
+    } catch (error) {
+      console.warn("[rooms] no se pudo persistir:", error);
+    }
+  }
+
+  private load(): void {
+    if (!this.storagePath || !existsSync(this.storagePath)) return;
+    try {
+      const saved = JSON.parse(readFileSync(this.storagePath, "utf8")) as PersistedRoom[];
+      for (const data of saved) {
+        const host = data.players.find((player) => player.npub === data.hostNpub) ?? data.players[0];
+        if (!host || !/^[A-Za-z0-9]{4}$/.test(data.id)) continue;
+        const room = new Room(host, data.id, data);
+        this.byId.set(room.id, room);
+        this.byCode.set(room.code, room.id);
+      }
+    } catch (error) {
+      console.warn("[rooms] store inválido, se inicia vacío:", error);
+    }
   }
 
   /**
@@ -213,6 +300,6 @@ export class RoomError extends Error {
 function makeCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
-  for (const byte of randomBytes(6)) out += alphabet[byte % alphabet.length];
+  for (const byte of randomBytes(4)) out += alphabet[byte % alphabet.length];
   return out;
 }

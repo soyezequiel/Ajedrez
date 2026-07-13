@@ -46,7 +46,7 @@ export type ClientMessage =
   | { t: "auth_token"; token: string }
   | { t: "create_room" }
   | { t: "join_room"; roomId?: string; code?: string }
-  /** Room Link de Luna: entra/crea la sala por su id externo (`?lnRoom=<id>`). */
+  /** Room Link: entra/crea la sala por su código externo de 4 caracteres (`?join=5XRR`). */
   | { t: "enter_room"; roomId: string }
   | { t: "ready" }
   | { t: "move"; move: MovePayload }

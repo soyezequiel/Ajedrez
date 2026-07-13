@@ -40,13 +40,14 @@ export function publishToWriteSync(event: Event): void {
 
 export interface NostrProfile {
   name: string | null;
+  picture: string | null;
   /** Dirección Lightning (lud16) para zaps, si el perfil la declara. */
   lud16: string | null;
 }
 
 /** Lee el kind:0 del pubkey y devuelve nombre visible + lud16 (best-effort). */
 export async function fetchProfile(pubkey: string, timeoutMs = 2500): Promise<NostrProfile> {
-  const empty: NostrProfile = { name: null, lud16: null };
+  const empty: NostrProfile = { name: null, picture: null, lud16: null };
   try {
     const ev = await withTimeout(
       getPool().get([...RELAYS.profile], { kinds: [0], authors: [pubkey] }),
@@ -57,10 +58,38 @@ export async function fetchProfile(pubkey: string, timeoutMs = 2500): Promise<No
     const name =
       pickString(meta.display_name) ?? pickString(meta.name) ?? null;
     const lud16 = pickString(meta.lud16) ?? null;
-    return { name, lud16 };
+    const picture = pickString(meta.picture) ?? pickString(meta.image) ?? null;
+    return { name, picture, lud16 };
   } catch {
     return empty;
   }
+}
+
+/** Perfiles kind:0 en lote, quedándonos con el evento más reciente por autor. */
+export async function fetchProfiles(pubkeys: string[], timeoutMs = 3500): Promise<Map<string, NostrProfile>> {
+  const authors = [...new Set(pubkeys.map((p) => p.trim().toLowerCase()))]
+    .filter((p) => /^[0-9a-f]{64}$/.test(p));
+  const result = new Map<string, NostrProfile>();
+  if (!authors.length) return result;
+  try {
+    const events = await getPool().querySync([...RELAYS.profile], { kinds: [0], authors }, { maxWait: timeoutMs });
+    const newest = new Map<string, (typeof events)[number]>();
+    for (const event of events) {
+      const previous = newest.get(event.pubkey);
+      if (!previous || event.created_at > previous.created_at) newest.set(event.pubkey, event);
+    }
+    for (const [pubkey, event] of newest) {
+      try {
+        const meta = JSON.parse(event.content) as Record<string, unknown>;
+        result.set(pubkey, {
+          name: pickString(meta.display_name) ?? pickString(meta.name),
+          picture: pickString(meta.picture) ?? pickString(meta.image),
+          lud16: pickString(meta.lud16),
+        });
+      } catch { /* metadata inválida */ }
+    }
+  } catch { /* relays best-effort */ }
+  return result;
 }
 
 /**

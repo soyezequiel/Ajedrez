@@ -36,7 +36,7 @@ interface BetRecord {
 }
 const betsByRoom = new Map<string, BetRecord>();
 
-const rooms = new RoomManager();
+const rooms = new RoomManager(config.roomsPath);
 
 interface ConnState {
   identity?: SessionIdentity;
@@ -262,8 +262,9 @@ function handleCreate(ws: WebSocket, state: ConnState): void {
  *  la sala por su id, creándola lazy si no existe. Público: cualquiera con el link
  *  entra (identidad ya validada por el login Nostr de este socket). */
 function handleEnterRoom(ws: WebSocket, state: ConnState, roomId: string): void {
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(roomId))
+  if (!/^[A-Za-z0-9]{4}$/.test(roomId))
     return send(ws, { t: "error", code: "BAD_ROOM_ID", message: "id de sala inválido" });
+  roomId = roomId.toUpperCase();
   const me = identity(state);
   const room = rooms.enterByExternalId(roomId, {
     npub: me.npub,
@@ -303,6 +304,7 @@ function resync(ws: WebSocket, room: Room): void {
     return;
   }
   send(ws, { t: "match", snapshot: match.snapshot() });
+  if (!match.isOver) scheduleClock(room);
   if (room.drawOfferBy && !match.isOver)
     send(ws, { t: "draw_offer", byNpub: room.drawOfferBy });
   if (match.isOver) {
@@ -625,6 +627,16 @@ function rateMatch(room: Room, winners: Npub[]): RatingChange[] | undefined {
 // ----------------------------------------------------------------- helpers
 
 function attachToRoom(ws: WebSocket, state: ConnState, room: Room): void {
+  const previousId = state.roomId;
+  const me = state.identity;
+  if (previousId && previousId !== room.id) {
+    roomSockets.get(previousId)?.delete(ws);
+    const previous = rooms.get(previousId);
+    if (previous && me && previous.phase === "playing" && previous.match && !previous.match.isOver) {
+      broadcast(previous, { t: "presence", npub: me.npub, online: false, graceMs: config.abandonGraceMs });
+      startAbandonTimer(previous, me.npub);
+    }
+  }
   state.roomId = room.id;
   room.touch();
   const set = roomSockets.get(room.id) ?? new Set<WebSocket>();
@@ -632,7 +644,6 @@ function attachToRoom(ws: WebSocket, state: ConnState, room: Room): void {
   roomSockets.set(room.id, set);
   // Si tenía un timer de abandono corriendo, volvió a tiempo.
   const timers = abandonTimers.get(room.id);
-  const me = state.identity;
   const pending = me ? timers?.get(me.npub) : undefined;
   if (me && pending) {
     clearTimeout(pending);
@@ -704,10 +715,12 @@ function roomView(room: Room): RoomView {
 }
 
 function broadcastRoom(room: Room): void {
+  rooms.persist();
   broadcast(room, { t: "room", room: roomView(room) });
 }
 
 function broadcast(room: Room, msg: ServerMessage): void {
+  if (msg.t === "match" || msg.t === "draw_offer" || msg.t === "rematch_offer" || msg.t === "ended") rooms.persist();
   const set = roomSockets.get(room.id);
   if (!set) return;
   const data = JSON.stringify(msg);

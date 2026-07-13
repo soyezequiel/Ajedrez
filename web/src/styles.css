@@ -116,7 +116,9 @@ input[readonly] { color: var(--muted); font-family: var(--mono); font-size: 12px
   color: var(--gold);
   display: grid; place-items: center;
   font-weight: 600; font-size: 13px;
+  overflow: hidden;
 }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .avatar.me-avatar { border-color: var(--gold); }
 
 /* ---------------------------------------------------------- cards / layout */
@@ -158,15 +160,18 @@ input[readonly] { color: var(--muted); font-family: var(--mono); font-size: 12px
 .login .fine { margin-top: 28px; }
 .login .stack .fine { margin-top: 0; }
 .challenge-banner {
-  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  position: fixed; right: 24px; bottom: 24px;
   z-index: 50; display: flex; align-items: center; gap: 18px;
   padding: 14px 20px; border-radius: 14px;
   background: var(--panel, #16181d); border: 1px solid var(--gold);
-  box-shadow: 0 12px 40px rgba(0,0,0,.5); max-width: min(560px, 92vw);
+  box-shadow: 0 12px 40px rgba(0,0,0,.5); width: min(460px, calc(100vw - 48px));
+  animation: invite-in .2s ease-out;
 }
+.invite-avatar { width: 42px; height: 42px; flex: 0 0 auto; }
 .challenge-text { color: var(--text, #eee); font-size: 15px; }
 .challenge-actions { display: flex; gap: 10px; margin-left: auto; }
 .challenge-actions button { padding: 8px 16px; }
+@keyframes invite-in { from { opacity: 0; transform: translateY(12px); } }
 .modal-overlay {
   position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
   background: rgba(0,0,0,.6); padding: 24px;
@@ -321,6 +326,18 @@ canvas#board,
 }
 .invite-card .row { margin-top: 20px; }
 .invite-card .fine { margin: 14px 0 0; }
+.friend-invite-card { padding-bottom: 12px; }
+.friend-list {
+  display: flex; flex-direction: column; gap: 6px; max-height: 240px;
+  overflow-y: auto; margin: 14px 0;
+}
+.friend-row {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center; gap: 10px; padding: 6px; border-radius: var(--radius);
+}
+.friend-row:hover { background: var(--panel-2); }
+.friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.friend-row button { padding: 7px 11px; font-size: 12px; }
 
 /* players list (lobby) */
 .seat { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: var(--radius); }
@@ -407,6 +424,16 @@ canvas#board,
   animation: reconnect-spin 1.2s linear infinite;
 }
 @keyframes reconnect-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 620px) {
+  .challenge-banner {
+    left: 12px; right: 12px; bottom: 12px; width: auto;
+    align-items: flex-start; flex-wrap: wrap; gap: 10px;
+  }
+  .challenge-text { flex: 1; min-width: 0; }
+  .challenge-actions { width: 100%; }
+  .challenge-actions button { flex: 1; }
+}
 
 /* ---------------------------------------------------------- toast */
 .toast {

@@ -48,6 +48,7 @@ services:
       GAME_COORD: ${GAME_COORD:-30023:7c45dcfb2e93594ce43bc2b16fd29b3c38ba0daf42ae8561fe6f0353892b7df4:ajedrez}
       # El rating ELO se persiste acá (dentro del volumen `ratings`).
       RATINGS_PATH: /data/ratings.json
+      ROOMS_PATH: /data/rooms.json
     volumes:
       - ratings:/data
     # Acceso directo por LAN/local (además del túnel). El host 8790 evita chocar

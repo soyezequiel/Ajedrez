@@ -18,7 +18,9 @@ import {
 } from "./nostr/signer-core.js";
 import { connectBunker, startNostrConnect } from "./nostr/signer-nip46.js";
 import QRCode from "qrcode";
-import { fetchProfile } from "./nostr/relays.js";
+import { fetchProfile, fetchProfiles, type NostrProfile } from "./nostr/relays.js";
+import { fetchContacts } from "./nostr/contacts.js";
+import { startRoomLinkInviteInbox, type RoomLinkInvite } from "./nostr/room-link-inbox.js";
 import { publishRating } from "./nostr/score.js";
 import { createPresence, type PresenceController } from "./nostr/presence.js";
 import { sendChallenge, startChallengeInbox, toPubkeyHex } from "./nostr/challenge.js";
@@ -71,7 +73,7 @@ function clearSavedRoom(): void {
 /** Cómo está autenticado el jugador en esta sesión (para re-auth al reconectar). */
 type LoginMode =
   | { kind: "guest"; name: string }
-  | { kind: "nostr"; signer: NgpSigner; displayName: string };
+  | { kind: "nostr"; signer: NgpSigner; rawSigner: ChessSigner; displayName: string };
 let login: LoginMode | null = null;
 
 /** Controlador de presencia NIP-38 (solo login Nostr). */
@@ -79,6 +81,11 @@ let presence: PresenceController | null = null;
 
 /** Corta la suscripción al inbox de retos NIP-17 (solo Nostr). */
 let inboxStop: (() => void) | null = null;
+
+/** Perfiles y contactos Nostr usados por avatares e invitaciones. */
+const playerProfiles = new Map<string, NostrProfile>();
+let friends: { pubkey: string; name: string; picture: string | null }[] = [];
+let friendsLoading = false;
 
 /** Reto pendiente de enviar: se dispara cuando se crea la sala del retador. */
 let pendingChallenge: { toPubkey: string } | null = null;
@@ -176,7 +183,7 @@ function storedName(): string | null {
  *  al abrir el link — por eso el id puede no pre-existir. Validamos el formato. */
 function pendingJoin(): string | null {
   const v = new URLSearchParams(location.search).get("join");
-  return v && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : null;
+  return v && /^[A-Za-z0-9]{4}$/.test(v) ? v.toUpperCase() : null;
 }
 
 function start(): void {
@@ -226,21 +233,21 @@ function loginWith(name: string): void {
  *  los logins repetidos de una clave sin kind:0 tampoco esperen. */
 const PROFILE_CACHE_KEY = "ajedrez.profile.v1";
 
-function readCachedProfile(pubkey: string): { known: boolean; name: string | null } {
+function readCachedProfile(pubkey: string): { known: boolean; name: string | null; picture: string | null } {
   try {
     const raw = localStorage.getItem(PROFILE_CACHE_KEY);
-    if (!raw) return { known: false, name: null };
-    const parsed = JSON.parse(raw) as { pubkey?: string; name?: string | null };
-    if (parsed.pubkey !== pubkey) return { known: false, name: null };
-    return { known: true, name: parsed.name ?? null };
+    if (!raw) return { known: false, name: null, picture: null };
+    const parsed = JSON.parse(raw) as { pubkey?: string; name?: string | null; picture?: string | null };
+    if (parsed.pubkey !== pubkey) return { known: false, name: null, picture: null };
+    return { known: true, name: parsed.name ?? null, picture: parsed.picture ?? null };
   } catch {
-    return { known: false, name: null };
+    return { known: false, name: null, picture: null };
   }
 }
 
-function writeCachedProfile(pubkey: string, name: string | null): void {
+function writeCachedProfile(pubkey: string, name: string | null, picture: string | null): void {
   try {
-    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ pubkey, name }));
+    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ pubkey, name, picture }));
   } catch {
     /* storage bloqueado */
   }
@@ -296,7 +303,7 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
     // extensión puede tardar o directamente colgarse en getPublicKey; la sesión no
     // debe depender de eso. No llamamos getPublicKey acá; la primera firma llega
     // con la presencia (al autenticar), que con extensión puede promptar al abrir.
-    login = { kind: "nostr", signer: toNgpSigner(signer), displayName: "" };
+    login = { kind: "nostr", signer: toNgpSigner(signer), rawSigner: signer, displayName: "" };
     net.connect();
     net.authToken(token);
     return;
@@ -314,12 +321,14 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
   updateStoredPubkey(pubkey);
   const cached = readCachedProfile(pubkey);
   profileKnown = cached.known;
-  login = { kind: "nostr", signer: toNgpSigner(signer), displayName: cached.name ?? "" };
+  login = { kind: "nostr", signer: toNgpSigner(signer), rawSigner: signer, displayName: cached.name ?? "" };
+  playerProfiles.set(pubkey, { name: cached.name, picture: cached.picture, lud16: null });
   // Perfil en paralelo: refresca la caché (positiva o negativa) y el nombre si
   // todavía no se mandó al server.
   profileFetch = fetchProfile(pubkey)
     .then((p) => {
-      writeCachedProfile(pubkey, p.name);
+      writeCachedProfile(pubkey, p.name, p.picture);
+      playerProfiles.set(pubkey, p);
       if (p.name && login?.kind === "nostr" && !login.displayName) login.displayName = p.name;
     })
     .catch(() => {});
@@ -353,6 +362,16 @@ function lazySigner(p: Promise<ChessSigner | null>): ChessSigner {
       if (!s.nip44Decrypt) throw new Error("sin NIP-44");
       return s.nip44Decrypt(pk, ct);
     },
+    nip04Encrypt: async (pk, pt) => {
+      const s = await real();
+      if (!s.nip04Encrypt) throw new Error("sin NIP-04");
+      return s.nip04Encrypt(pk, pt);
+    },
+    nip04Decrypt: async (pk, ct) => {
+      const s = await real();
+      if (!s.nip04Decrypt) throw new Error("sin NIP-04");
+      return s.nip04Decrypt(pk, ct);
+    },
   };
 }
 
@@ -364,7 +383,8 @@ function lazySigner(p: Promise<ChessSigner | null>): ChessSigner {
 function authViaToken(token: string): void {
   renderConnecting();
   const restorePromise = restoreSigner();
-  login = { kind: "nostr", signer: toNgpSigner(lazySigner(restorePromise)), displayName: "" };
+  const lazy = lazySigner(restorePromise);
+  login = { kind: "nostr", signer: toNgpSigner(lazy), rawSigner: lazy, displayName: "" };
   net.connect();
   net.authToken(token);
   restorePromise
@@ -372,7 +392,10 @@ function authViaToken(token: string): void {
       // Reemplazamos el firmador perezoso por el real para las features, sin llamar
       // getPublicKey/perfil acá: la sesión ya vale por token. La primera firma llega
       // con la presencia (al autenticar), que con extensión puede promptar al abrir.
-      if (s && login?.kind === "nostr") login.signer = toNgpSigner(s);
+      if (s && login?.kind === "nostr") {
+        login.signer = toNgpSigner(s);
+        login.rawSigner = s;
+      }
     })
     .catch(() => {});
 }
@@ -463,7 +486,43 @@ function startInbox(): void {
   if (inboxStop || login?.kind !== "nostr") return;
   const pubkey = state.identity?.pubkey;
   if (!pubkey) return;
-  inboxStop = startChallengeInbox(login.signer, pubkey, showIncomingChallenge);
+  const stopChallenge = startChallengeInbox(login.signer, pubkey, showIncomingChallenge);
+  const stopRoomLinks = startRoomLinkInviteInbox(login.rawSigner, pubkey, showIncomingRoomLink);
+  inboxStop = () => { stopChallenge(); stopRoomLinks(); };
+}
+
+async function loadSocialData(pubkey: string): Promise<void> {
+  if (friendsLoading) return;
+  friendsLoading = true;
+  try {
+    const own = await fetchProfile(pubkey);
+    playerProfiles.set(pubkey, own);
+    writeCachedProfile(pubkey, own.name, own.picture);
+    if (own.name && state.identity) state.identity.displayName = own.name;
+    const contacts = (await fetchContacts(pubkey)).slice(0, 80);
+    const profiles = await fetchProfiles(contacts);
+    friends = contacts.map((contact) => {
+      const profile = profiles.get(contact);
+      if (profile) playerProfiles.set(contact, profile);
+      return {
+        pubkey: contact,
+        name: profile?.name ?? `npub…${contact.slice(-8)}`,
+        picture: profile?.picture ?? null,
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+    if (!state.room) renderHome(); else patchSidePanels();
+  } finally {
+    friendsLoading = false;
+  }
+}
+
+async function hydrateRoomProfiles(room: RoomView): Promise<void> {
+  const pubkeys = room.players.flatMap((player) => player.pubkey ? [player.pubkey] : []);
+  const missing = pubkeys.filter((pubkey) => !playerProfiles.has(pubkey));
+  if (!missing.length) return;
+  const profiles = await fetchProfiles(missing);
+  for (const [pubkey, profile] of profiles) playerProfiles.set(pubkey, profile);
+  if (state.room?.id === room.id) patchGame();
 }
 
 /** Si hay un reto pendiente y esta es la sala que creé, lo envío al rival. */
@@ -485,15 +544,45 @@ function maybeSendPendingChallenge(room: RoomView): void {
 
 /** Banner de reto entrante con acción de aceptar. */
 function showIncomingChallenge(c: ParsedChallenge): void {
+  if (!c.roomId) return;
+  const known = friends.find((friend) => friend.pubkey === c.fromPubkey);
+  showInvitePopup({
+    roomId: c.roomId,
+    name: known?.name ?? `${c.fromNpub.slice(0, 12)}…`,
+    picture: known?.picture ?? null,
+  });
+  void enrichInvitePopup(c.roomId, c.fromPubkey);
+}
+
+function showIncomingRoomLink(invite: RoomLinkInvite): void {
+  const known = friends.find((friend) => friend.pubkey === invite.fromPubkey);
+  showInvitePopup({
+    roomId: invite.roomId,
+    name: known?.name ?? `npub…${invite.fromPubkey.slice(-8)}`,
+    picture: known?.picture ?? null,
+  });
+  void enrichInvitePopup(invite.roomId, invite.fromPubkey);
+}
+
+async function enrichInvitePopup(roomId: string, pubkey: string): Promise<void> {
+  const profile = (await fetchProfiles([pubkey])).get(pubkey);
+  const current = document.getElementById("challenge-banner");
+  if (!profile || current?.dataset.roomId !== roomId) return;
+  showInvitePopup({ roomId, name: profile.name ?? `npub…${pubkey.slice(-8)}`, picture: profile.picture });
+}
+
+/** Popup no bloqueante abajo a la derecha para DMs Nostr y retos NIP-17. */
+function showInvitePopup(invite: { roomId: string; name: string; picture: string | null }): void {
   document.getElementById("challenge-banner")?.remove();
   const el = document.createElement("div");
   el.id = "challenge-banner";
   el.className = "challenge-banner";
-  const who = `${c.fromNpub.slice(0, 12)}…`;
+  el.dataset.roomId = invite.roomId;
   el.innerHTML = `
-    <span class="challenge-text">♞ <b>${who}</b> te retó a una partida</span>
+    ${avatarHtml(invite.name, invite.picture, "invite-avatar")}
+    <span class="challenge-text"><b>${escapeHtml(invite.name)}</b> te invitó a jugar ajedrez</span>
     <span class="challenge-actions">
-      <button class="btn-gold" id="challenge-accept">Aceptar</button>
+      <button class="btn-gold" id="challenge-accept">Unirme</button>
       <button id="challenge-dismiss">Ignorar</button>
     </span>`;
   document.body.appendChild(el);
@@ -501,8 +590,7 @@ function showIncomingChallenge(c: ParsedChallenge): void {
   el.querySelector("#challenge-dismiss")!.addEventListener("click", close);
   el.querySelector("#challenge-accept")!.addEventListener("click", () => {
     close();
-    if (c.roomId) net.joinRoom({ roomId: c.roomId });
-    else toast("El reto no trae sala");
+    if (invite.roomId) net.enterRoom(invite.roomId);
   });
 }
 
@@ -545,6 +633,7 @@ function wireNet(): void {
     if (m.token) writeSessionToken(m.token); // guarda/rota el token de sesión
     state.identity = m.identity;
     startInbox();
+    if (m.identity.pubkey) void loadSocialData(m.identity.pubkey);
     // Presencia NIP-38 desde el arranque de la sesión (no desde la partida): el
     // jugador aparece presente apenas abre el juego. Idempotente en reconexiones.
     ensurePresence()?.start();
@@ -574,6 +663,7 @@ function wireNet(): void {
       toast("¡Revancha! Colores invertidos");
     }
     maybeSendPendingChallenge(m.room);
+    void hydrateRoomProfiles(m.room);
     if (!wasInRoom) enterGame();
     else patchGame();
   });
@@ -723,11 +813,33 @@ function myColor(): Color | null {
 
 function nameOf(npub: string): string {
   const p = state.room?.players.find((x) => x.npub === npub);
-  return p?.displayName ?? npub.slice(0, 10);
+  return p ? visibleName(p) : npub.slice(0, 10);
 }
 
 function initials(name: string): string {
   return name.slice(0, 2).toUpperCase();
+}
+
+function profileFor(pubkey?: string): NostrProfile | null {
+  return pubkey ? playerProfiles.get(pubkey) ?? null : null;
+}
+
+function visibleName(player: { displayName: string; pubkey?: string }): string {
+  return profileFor(player.pubkey)?.name ?? player.displayName;
+}
+
+function avatarHtml(name: string, picture: string | null, extraClass = ""): string {
+  const safePicture = picture && /^https?:\/\//i.test(picture) ? escapeHtml(picture) : null;
+  const classes = `avatar${extraClass ? ` ${extraClass}` : ""}`;
+  return safePicture
+    ? `<span class="${classes}"><img src="${safePicture}" alt="" referrerpolicy="no-referrer" /></span>`
+    : `<span class="${classes}">${escapeHtml(initials(name))}</span>`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+  })[char]!);
 }
 
 function endedText(winners: string[], result?: MatchSnapshot["result"]): { text: string; sub: string } {
@@ -979,13 +1091,15 @@ function showGeneratedKey(): void {
 
 function topbar(): string {
   const id = state.identity;
+  const myProfile = profileFor(id?.pubkey);
+  const myName = myProfile?.name ?? id?.displayName ?? "";
   const soundBtn = `<button class="logout" data-action="sound" title="Sonido">${soundEnabled() ? "🔊" : "🔇"}</button>`;
   return `
     <header class="topbar">
       <span class="brand"><span class="mark">♞</span>Ajedrez</span>
       <span class="spacer"></span>
       ${soundBtn}
-      ${id ? `<span class="me"><span class="avatar">${initials(id.displayName)}</span>${id.displayName}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
+      ${id ? `<span class="me">${avatarHtml(myName, myProfile?.picture ?? null)}${escapeHtml(myName)}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
     </header>`;
 }
 
@@ -1010,7 +1124,7 @@ function renderHome(): void {
           <h2 class="card-title">Unirse por código</h2>
           <p class="muted">¿Te pasaron un código? Entrá directo a la sala.</p>
           <div class="row">
-            <input id="code" class="code-field" placeholder="ABC123" maxlength="8" />
+            <input id="code" class="code-field" placeholder="5XRR" maxlength="4" />
             <button id="join">Entrar</button>
           </div>
         </section>
@@ -1024,6 +1138,7 @@ function renderHome(): void {
     if (code) net.joinRoom({ code });
   });
   document.getElementById("challenge-send")?.addEventListener("click", sendChallengeFromHome);
+  wireFriendInviteButtons();
 }
 
 /** Tarjeta de reto por npub — solo para login Nostr (los invitados no tienen clave). */
@@ -1032,13 +1147,57 @@ function challengeCard(): string {
   return `
     <section class="card action-card">
       <span class="glyph">♞</span>
-      <h2 class="card-title">Retar a un amigo</h2>
-      <p class="muted">Pegá el npub de tu rival: le llega un reto cifrado por Nostr.</p>
+      <h2 class="card-title">Invitar a jugar</h2>
+      <p class="muted">Elegí un contacto de Nostr o pegá su npub. Le llegará una invitación privada.</p>
+      ${friendInviteListHtml()}
       <div class="row">
         <input id="challenge-npub" placeholder="npub1…" />
         <button id="challenge-send">Retar</button>
       </div>
     </section>`;
+}
+
+function friendInviteListHtml(): string {
+  if (friendsLoading && !friends.length) return `<p class="fine">Cargando contactos Nostr…</p>`;
+  if (!friends.length) return `<p class="fine">Tus contactos NIP-02 aparecerán acá.</p>`;
+  return `<div class="friend-list">${friends.slice(0, 12).map((friend) => `
+    <div class="friend-row">
+      ${avatarHtml(friend.name, friend.picture)}
+      <span class="friend-name">${escapeHtml(friend.name)}</span>
+      <button type="button" data-invite-pubkey="${friend.pubkey}">Invitar</button>
+    </div>`).join("")}</div>`;
+}
+
+function wireFriendInviteButtons(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-invite-pubkey]").forEach((button) => {
+    button.addEventListener("click", () => void inviteFriend(button.dataset.invitePubkey ?? "", button));
+  });
+}
+
+async function inviteFriend(toPubkey: string, button?: HTMLButtonElement): Promise<void> {
+  if (!/^[0-9a-f]{64}$/.test(toPubkey) || login?.kind !== "nostr") return;
+  if (toPubkey === state.identity?.pubkey) return toast("No podés invitarte a vos mismo");
+  if (!state.room) {
+    pendingChallenge = { toPubkey };
+    toast("Creando sala…");
+    net.createRoom();
+    return;
+  }
+  button?.setAttribute("disabled", "true");
+  const friend = friends.find((candidate) => candidate.pubkey === toPubkey);
+  try {
+    await sendChallenge(login.signer, {
+      toPubkey,
+      roomId: state.room.id,
+      joinUrl: `${location.origin}/?join=${state.room.id}`,
+      message: `${state.identity?.displayName ?? "Alguien"} te invita a jugar ajedrez`,
+    });
+    toast(`Invitación enviada a ${friend?.name ?? "tu contacto"}`);
+  } catch {
+    toast("No se pudo enviar la invitación");
+  } finally {
+    button?.removeAttribute("disabled");
+  }
 }
 
 /** Crea la sala y deja el reto pendiente; se envía al llegar el `room`. */
@@ -1192,17 +1351,19 @@ function playerBarClass(p?: { color: Color | null }): string {
   return "player-bar" + (isTurn ? " turn" : "");
 }
 
-function playerBarInner(p: { npub: string; displayName: string; color: Color | null } | undefined, isMe: boolean): string {
+function playerBarInner(p: RoomPlayer | undefined, isMe: boolean): string {
   if (!p) return `<span class="muted">Esperando rival…</span>`;
+  const name = visibleName(p);
+  const profile = profileFor(p.pubkey);
   const m = state.match;
   const ms = p.color === "w" ? m?.whiteClockMs : m?.blackClockMs;
   const isTurn = m?.turn === p.color && m?.result.kind === "ongoing";
   const tag = isMe && isTurn ? `<span class="turn-tag">TU TURNO</span>` : "";
   const captured = p.color ? capturedHtml(p.color) : "";
   return `
-    <span class="avatar${isMe ? " me-avatar" : ""}">${initials(p.displayName)}</span>
+    ${avatarHtml(name, profile?.picture ?? null, isMe ? "me-avatar" : "")}
     <div class="player-meta">
-      <span class="player-name">${p.displayName}${tag}</span>
+      <span class="player-name">${escapeHtml(name)}${tag}</span>
       <span class="captured">${captured}</span>
     </div>
     <span class="clock${isTurn ? " is-active" : ""}"${p.color ? ` data-clock="${p.color}"` : ""}>${ms === undefined || !p.color ? "--:--" : fmtClock(ms, p.color)}</span>`;
@@ -1258,12 +1419,14 @@ function lobbyPanel(): string {
   const inviteUrl = `${location.origin}/?join=${encodeURIComponent(room.id)}`;
   const seats = room.players
     .map((p) => {
+      const name = visibleName(p);
+      const profile = profileFor(p.pubkey);
       const role = p.npub === room.hostNpub ? "anfitrión" : "invitado";
       const colorName = p.color === "w" ? "Blancas" : p.color === "b" ? "Negras" : "—";
       return `<div class="seat">
-        <span class="avatar">${initials(p.displayName)}</span>
+        ${avatarHtml(name, profile?.picture ?? null)}
         <div class="seat-meta">
-          <span class="player-name">${p.displayName}</span>
+          <span class="player-name">${escapeHtml(name)}</span>
           <span class="seat-role">${colorName} · ${role}</span>
         </div>
         <span class="seat-status"><span class="dot"></span>Conectado</span>
@@ -1287,6 +1450,7 @@ function lobbyPanel(): string {
       </div>
       <p class="fine">Compartí el link o el código (tu rival tiene que usar OTRO nombre).</p>
     </div>
+    ${login?.kind === "nostr" && !full ? `<div class="card friend-invite-card"><p class="section-label">Invitar desde Nostr</p>${friendInviteListHtml()}</div>` : ""}
     <div class="card">${seats}${emptySeat}</div>
     ${betPanel()}
     <button class="btn-gold" id="ready" ${!full || state.ready ? "disabled" : ""}>
@@ -1473,6 +1637,7 @@ function achievementText(): string {
 
 function wireSidePanels(): void {
   const on = (id: string, fn: () => void) => document.getElementById(id)?.addEventListener("click", fn);
+  wireFriendInviteButtons();
   on("copy", () => {
     const el = document.getElementById("invite-url") as HTMLInputElement | null;
     if (el) navigator.clipboard.writeText(el.value).then(() => toast("Link copiado"));

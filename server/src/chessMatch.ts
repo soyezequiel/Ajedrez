@@ -32,13 +32,19 @@ export class ChessMatch {
     black: Npub;
     clockMs: number;
     now?: number;
+    restored?: PersistedMatch;
   }) {
     this.matchId = opts.matchId;
     this.white = opts.white;
     this.black = opts.black;
-    this.whiteClockMs = opts.clockMs;
-    this.blackClockMs = opts.clockMs;
-    this.turnStartedAt = opts.now ?? Date.now();
+    this.whiteClockMs = opts.restored?.whiteClockMs ?? opts.clockMs;
+    this.blackClockMs = opts.restored?.blackClockMs ?? opts.clockMs;
+    this.turnStartedAt = opts.restored?.turnStartedAt ?? opts.now ?? Date.now();
+    if (opts.restored) {
+      for (const san of opts.restored.sanHistory) this.chess.move(san);
+      this.result = opts.restored.result;
+      this.lastMove = opts.restored.lastMove;
+    }
   }
 
   get isOver(): boolean {
@@ -207,6 +213,27 @@ export class ChessMatch {
       result: this.result,
     };
   }
+
+  /** Estado durable suficiente para reconstruir el motor tras reiniciar Node. */
+  serialize(): PersistedMatch {
+    return {
+      whiteClockMs: this.whiteClockMs,
+      blackClockMs: this.blackClockMs,
+      turnStartedAt: this.turnStartedAt,
+      lastMove: this.lastMove,
+      sanHistory: this.chess.history(),
+      result: this.result,
+    };
+  }
+}
+
+export interface PersistedMatch {
+  whiteClockMs: number;
+  blackClockMs: number;
+  turnStartedAt: number;
+  lastMove: MovePayload | null;
+  sanHistory: string[];
+  result: MatchResult;
 }
 
 export class MatchError extends Error {
