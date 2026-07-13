@@ -83,6 +83,8 @@ export type ServerMessage =
   /** La apuesta se cerró (cancelada, anulada o liquidada). */
   | { t: "bet_closed"; reason: string }
   | { t: "room"; room: RoomView }
+  | { t: "left_room" }
+  | { t: "room_closed"; reason: string }
   | { t: "match"; snapshot: MatchSnapshot }
   /** Oferta de tablas pendiente; `null` = fue rechazada/retirada. */
   | { t: "draw_offer"; byNpub: string | null }

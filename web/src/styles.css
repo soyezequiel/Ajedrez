@@ -284,6 +284,24 @@ canvas#board,
   border-radius: 6px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 0 0 1px rgba(201,164,92,0.25);
 }
+.board-coordinates { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; }
+.board-files {
+  position: absolute; left: 3.33%; right: 3.33%; bottom: 3.45%;
+  display: grid; grid-template-columns: repeat(8, 1fr);
+}
+.board-ranks {
+  position: absolute; top: 3.33%; bottom: 3.33%; left: 3.7%;
+  display: grid; grid-template-rows: repeat(8, 1fr);
+}
+.board-files span,
+.board-ranks span {
+  color: rgba(255,255,255,.82); font: 700 11px/1 var(--mono);
+  text-shadow: 0 1px 2px rgba(0,0,0,.9), 0 0 3px rgba(0,0,0,.65);
+}
+.board-files span { text-align: right; padding-right: 4px; align-self: end; }
+.board-ranks span { padding-top: 4px; }
+.board-wrap[data-board-kind="canvas"] .board-files { left: 0; right: 0; bottom: 2px; }
+.board-wrap[data-board-kind="canvas"] .board-ranks { top: 0; bottom: 0; left: 3px; }
 
 /* player bars flanking the board */
 .player-bar {
@@ -328,6 +346,7 @@ canvas#board,
 }
 .invite-card .row { margin-top: 20px; }
 .invite-card .fine { margin: 14px 0 0; }
+.leave-room { width: 100%; }
 .friend-invite-card { padding-bottom: 12px; }
 .friend-list {
   display: flex; flex-direction: column; gap: 6px; max-height: 240px;
@@ -338,7 +357,9 @@ canvas#board,
   align-items: center; gap: 10px; padding: 6px; border-radius: var(--radius);
 }
 .friend-row:hover { background: var(--panel-2); }
+.friend-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.friend-copy small { color: var(--gold); font-size: 10px; letter-spacing: .2px; }
 .friend-row button { padding: 7px 11px; font-size: 12px; }
 
 /* players list (lobby) */

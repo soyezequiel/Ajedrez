@@ -111,6 +111,8 @@ export type ServerMessage =
   | { t: "bet_invoice"; betId: string; bolt11: string | null; amountSats: number; stakeSats: number }
   | { t: "bet_closed"; reason: string }
   | { t: "room"; room: RoomView }
+  | { t: "left_room" }
+  | { t: "room_closed"; reason: string }
   | { t: "match"; snapshot: MatchSnapshot }
   /** Oferta de tablas pendiente; `null` = fue rechazada/retirada. */
   | { t: "draw_offer"; byNpub: string | null }

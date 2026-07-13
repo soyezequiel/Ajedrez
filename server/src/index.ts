@@ -165,7 +165,7 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
     case "test_attest":
       return handleTestAttest(ws, state, msg.score);
     case "leave":
-      return handleDisconnect(ws);
+      return handleLeaveRoom(ws, state);
   }
 }
 
@@ -720,6 +720,36 @@ function roomView(room: Room): RoomView {
 function broadcastRoom(room: Room): void {
   rooms.persist();
   broadcast(room, { t: "room", room: roomView(room) });
+}
+
+function handleLeaveRoom(ws: WebSocket, state: ConnState): void {
+  const room = currentRoom(state);
+  const me = identity(state);
+  if (room.phase === "playing" && room.match && !room.match.isOver) {
+    const snapshot = room.match.resign(me.npub);
+    broadcast(room, { t: "match", snapshot });
+    finishMatch(room);
+  }
+
+  roomSockets.get(room.id)?.delete(ws);
+  state.roomId = undefined;
+  readyByRoom.get(room.id)?.delete(me.npub);
+
+  if (room.phase === "lobby" && me.npub === room.hostNpub) {
+    const sockets = [...(roomSockets.get(room.id) ?? [])];
+    for (const socket of sockets) {
+      const otherState = conns.get(socket);
+      if (otherState?.roomId === room.id) otherState.roomId = undefined;
+      send(socket, { t: "room_closed", reason: "El anfitrión cerró la sala" });
+    }
+    rooms.remove(room.id);
+    purgeRoomState(room.id);
+  } else if (room.phase === "lobby") {
+    room.leave(me.npub);
+    rooms.persist();
+    broadcastRoom(room);
+  }
+  send(ws, { t: "left_room" });
 }
 
 function broadcast(room: Room, msg: ServerMessage): void {

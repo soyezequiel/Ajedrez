@@ -65,4 +65,5 @@ export class Net {
   declineDraw() { this.send({ t: "decline_draw" }); }
   proposeBet(stakeSats: number) { this.send({ t: "propose_bet", stakeSats }); }
   cancelBet() { this.send({ t: "cancel_bet" }); }
+  leaveRoom() { this.send({ t: "leave" }); }
 }

@@ -21,6 +21,13 @@ import QRCode from "qrcode";
 import { fetchProfile, fetchProfiles, type NostrProfile } from "./nostr/relays.js";
 import { fetchContacts } from "./nostr/contacts.js";
 import { startRoomLinkInviteInbox, type RoomLinkInvite } from "./nostr/room-link-inbox.js";
+import {
+  fetchKnownChessPlayers,
+  loadFriendAffinities,
+  prioritizeFriends,
+  rememberFriendActivity,
+  type FriendAffinities,
+} from "./nostr/friend-priority.js";
 import { publishRating } from "./nostr/score.js";
 import { createPresence, type PresenceController } from "./nostr/presence.js";
 import { sendChallenge, startChallengeInbox, toPubkeyHex } from "./nostr/challenge.js";
@@ -84,8 +91,14 @@ let inboxStop: (() => void) | null = null;
 
 /** Perfiles y contactos Nostr usados por avatares e invitaciones. */
 const playerProfiles = new Map<string, NostrProfile>();
-let friends: { pubkey: string; name: string; picture: string | null }[] = [];
+type ChessFriend = { pubkey: string; name: string; picture: string | null };
+const FRIENDS_CACHE_KEY = "ajedrez.challengeFriends.v1";
+let friends: ChessFriend[] = [];
 let friendsLoading = false;
+let friendsLoadingFor: string | null = null;
+let friendsLoadedFor: string | null = null;
+let friendAffinitiesFor: string | null = null;
+let friendAffinities: FriendAffinities = new Map();
 
 /** Reto pendiente de enviar: se dispara cuando se crea la sala del retador. */
 let pendingChallenge: { toPubkey: string } | null = null;
@@ -173,6 +186,7 @@ const state: State = {
 };
 
 let board: BoardController | null = null;
+let coordinateObserver: ResizeObserver | null = null;
 
 function boardKind(): BoardKind {
   return new URLSearchParams(location.search).get("board") === "canvas" ? "canvas" : "vexel";
@@ -194,6 +208,13 @@ function pendingJoin(): string | null {
 
 function start(): void {
   startVersionGuard(toast); // recarga sola si el server anuncia un build nuevo
+  try {
+    const flash = sessionStorage.getItem("ajedrez.flash.v1");
+    if (flash) {
+      sessionStorage.removeItem("ajedrez.flash.v1");
+      setTimeout(() => toast(flash), 250);
+    }
+  } catch { /* storage bloqueado */ }
   // "Salir" (delegado: la topbar se re-renderiza en cada pantalla). En plena
   // partida pide confirmación: salir implica abandonar.
   document.addEventListener("click", (e) => {
@@ -497,29 +518,110 @@ function startInbox(): void {
   inboxStop = () => { stopChallenge(); stopRoomLinks(); };
 }
 
-async function loadSocialData(pubkey: string): Promise<void> {
-  if (friendsLoading) return;
-  friendsLoading = true;
+function loadCachedFriends(pubkey: string): ChessFriend[] {
   try {
-    const own = await fetchProfile(pubkey);
+    const cached = JSON.parse(localStorage.getItem(FRIENDS_CACHE_KEY) ?? "null") as {
+      pubkey?: string; friends?: ChessFriend[];
+    } | null;
+    if (cached?.pubkey !== pubkey || !Array.isArray(cached.friends)) return [];
+    return cached.friends.filter((friend) => /^[0-9a-f]{64}$/.test(friend.pubkey));
+  } catch { return []; }
+}
+
+function saveCachedFriends(pubkey: string): void {
+  if (!friends.length) return;
+  try { localStorage.setItem(FRIENDS_CACHE_KEY, JSON.stringify({ pubkey, friends })); }
+  catch { /* caché best-effort */ }
+}
+
+function affinitiesFor(pubkey: string): FriendAffinities {
+  if (friendAffinitiesFor !== pubkey) {
+    friendAffinitiesFor = pubkey;
+    friendAffinities = loadFriendAffinities(pubkey);
+  }
+  return friendAffinities;
+}
+
+function sortFriends(pubkey: string): void {
+  friends = prioritizeFriends(friends, affinitiesFor(pubkey));
+}
+
+function refreshFriendUi(): void {
+  if (!state.identity) return;
+  if (!state.room) renderHome();
+  else if (state.room.phase === "lobby") patchSidePanels();
+}
+
+/** Caché instantánea → contactos → perfiles/actividad en paralelo, igual que Tetris. */
+async function loadSocialData(pubkey: string): Promise<void> {
+  if (friendsLoadedFor === pubkey || friendsLoadingFor === pubkey) return;
+  friendsLoadingFor = pubkey;
+  const cached = loadCachedFriends(pubkey);
+  if (cached.length) {
+    friends = cached;
+    sortFriends(pubkey);
+    refreshFriendUi();
+  } else if (friendsLoadedFor && friendsLoadedFor !== pubkey) {
+    friends = [];
+  }
+  friendsLoading = friends.length === 0;
+
+  const ownProfileTask = fetchProfile(pubkey).then((own) => {
     playerProfiles.set(pubkey, own);
     writeCachedProfile(pubkey, own.name, own.picture);
-    if (own.name && state.identity) state.identity.displayName = own.name;
-    const contacts = (await fetchContacts(pubkey)).slice(0, 80);
-    const profiles = await fetchProfiles(contacts);
+    if (own.name && state.identity?.pubkey === pubkey) state.identity.displayName = own.name;
+  }).catch(() => {});
+  try {
+    const contacts = (await fetchContacts(pubkey)).slice(0, 1000);
+    if (friendsLoadingFor !== pubkey) return;
+    const previous = new Map(friends.map((friend) => [friend.pubkey, friend]));
     friends = contacts.map((contact) => {
-      const profile = profiles.get(contact);
-      if (profile) playerProfiles.set(contact, profile);
-      return {
-        pubkey: contact,
-        name: profile?.name ?? `npub…${contact.slice(-8)}`,
-        picture: profile?.picture ?? null,
-      };
-    }).sort((a, b) => a.name.localeCompare(b.name));
-    if (!state.room) renderHome(); else patchSidePanels();
+      return previous.get(contact) ?? { pubkey: contact, name: `npub…${contact.slice(-8)}`, picture: null };
+    });
+    sortFriends(pubkey);
+    friendsLoading = false;
+    refreshFriendUi();
+
+    const profilesTask = fetchProfiles(contacts, (profiles) => {
+      if (friendsLoadingFor !== pubkey) return;
+      friends = friends.map((friend) => {
+        const profile = profiles.get(friend.pubkey);
+        if (!profile) return friend;
+        playerProfiles.set(friend.pubkey, profile);
+        return { ...friend, name: profile.name ?? friend.name, picture: profile.picture ?? friend.picture };
+      });
+      sortFriends(pubkey);
+      refreshFriendUi();
+    });
+    const activityTask = fetchKnownChessPlayers(contacts).then((known) => {
+      if (friendsLoadingFor !== pubkey || !known.size) return;
+      friendAffinities = rememberFriendActivity(pubkey, known);
+      friendAffinitiesFor = pubkey;
+      sortFriends(pubkey);
+      refreshFriendUi();
+    });
+    await Promise.all([ownProfileTask, profilesTask, activityTask]);
+    saveCachedFriends(pubkey);
+    friendsLoadedFor = pubkey;
   } finally {
     friendsLoading = false;
+    if (friendsLoadingFor === pubkey) friendsLoadingFor = null;
   }
+}
+
+function rememberChessFriends(friendPubkeys: Iterable<string>, matchId?: string | null): void {
+  const owner = state.identity?.pubkey?.toLowerCase();
+  if (!owner || !/^[0-9a-f]{64}$/.test(owner)) return;
+  friendAffinities = rememberFriendActivity(owner, friendPubkeys, { matchId });
+  friendAffinitiesFor = owner;
+  sortFriends(owner);
+  saveCachedFriends(owner);
+}
+
+function rememberRoomFriends(room: RoomView, matchId?: string | null): void {
+  const owner = state.identity?.pubkey?.toLowerCase();
+  if (!owner) return;
+  rememberChessFriends(room.players.flatMap((player) => player.pubkey && player.pubkey !== owner ? [player.pubkey] : []), matchId);
 }
 
 async function hydrateRoomProfiles(room: RoomView): Promise<void> {
@@ -551,6 +653,7 @@ function maybeSendPendingChallenge(room: RoomView): void {
 /** Banner de reto entrante con acción de aceptar. */
 function showIncomingChallenge(c: ParsedChallenge): void {
   if (!c.roomId) return;
+  rememberChessFriends([c.fromPubkey]);
   const known = friends.find((friend) => friend.pubkey === c.fromPubkey);
   showInvitePopup({
     roomId: c.roomId,
@@ -561,6 +664,7 @@ function showIncomingChallenge(c: ParsedChallenge): void {
 }
 
 function showIncomingRoomLink(invite: RoomLinkInvite): void {
+  rememberChessFriends([invite.fromPubkey]);
   const known = friends.find((friend) => friend.pubkey === invite.fromPubkey);
   showInvitePopup({
     roomId: invite.roomId,
@@ -669,6 +773,7 @@ function wireNet(): void {
       toast("¡Revancha! Colores invertidos");
     }
     maybeSendPendingChallenge(m.room);
+    rememberRoomFriends(m.room);
     void hydrateRoomProfiles(m.room);
     if (!wasInRoom) enterGame();
     else patchGame();
@@ -678,6 +783,7 @@ function wireNet(): void {
     if (sound) playSound(sound);
     state.match = m.snapshot;
     state.matchReceivedAt = Date.now();
+    if (state.room) rememberRoomFriends(state.room, m.snapshot.matchId);
     state.drawOfferBy = null;
     renderBoardFromMatch();
     patchGame();
@@ -1168,17 +1274,32 @@ function challengeCard(): string {
 function friendInviteListHtml(): string {
   if (friendsLoading && !friends.length) return `<p class="fine">Cargando contactos Nostr…</p>`;
   if (!friends.length) return `<p class="fine">Tus contactos NIP-02 aparecerán acá.</p>`;
-  return `<div class="friend-list">${friends.slice(0, 12).map((friend) => `
+  const owner = state.identity?.pubkey ?? "";
+  const affinities = affinitiesFor(owner);
+  return `<div class="friend-list">${friends.slice(0, 12).map((friend) => {
+    const affinity = affinities.get(friend.pubkey);
+    const label = (affinity?.gamesTogether ?? 0) > 0 ? "Ya jugaron juntos" : affinity ? "Ya jugó ajedrez" : "";
+    return `
     <div class="friend-row">
       ${avatarHtml(friend.name, friend.picture)}
-      <span class="friend-name">${escapeHtml(friend.name)}</span>
+      <span class="friend-copy"><span class="friend-name">${escapeHtml(friend.name)}</span>${label ? `<small>${label}</small>` : ""}</span>
       <button type="button" data-invite-pubkey="${friend.pubkey}">Invitar</button>
-    </div>`).join("")}</div>`;
+    </div>`;
+  }).join("")}</div>`;
 }
 
 function wireFriendInviteButtons(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-invite-pubkey]").forEach((button) => {
     button.addEventListener("click", () => void inviteFriend(button.dataset.invitePubkey ?? "", button));
+  });
+  net.on("left_room", () => {
+    clearSavedRoom();
+    location.reload();
+  });
+  net.on("room_closed", (m) => {
+    clearSavedRoom();
+    try { sessionStorage.setItem("ajedrez.flash.v1", m.reason); } catch { /* noop */ }
+    location.reload();
   });
 }
 
@@ -1253,7 +1374,10 @@ function enterGame(): void {
     }
     net.move(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n"));
   };
-  board = createBoard(document.getElementById("board-wrap")!, onMove, boardKind());
+  const boardHost = document.getElementById("board-wrap")!;
+  const kind = boardKind();
+  boardHost.dataset.boardKind = kind;
+  board = createBoard(boardHost, onMove, kind);
   renderBoardFromMatch();
   patchGame();
 }
@@ -1320,6 +1444,7 @@ function renderBoardFromMatch(): void {
   if (!board) return;
   const color = myColor() ?? "w";
   board.setOrientation(color);
+  renderBoardCoordinates(color);
   if (state.match) {
     board.applyFen(state.match.fen);
     const last = state.match.lastMove;
@@ -1330,6 +1455,36 @@ function renderBoardFromMatch(): void {
     board.applyFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1");
     board.setInteractive(false);
   }
+}
+
+function renderBoardCoordinates(color: Color): void {
+  const host = document.getElementById("board-wrap");
+  if (!host) return;
+  const files = color === "w" ? [..."abcdefgh"] : [..."hgfedcba"];
+  const ranks = color === "w" ? ["8", "7", "6", "5", "4", "3", "2", "1"] : ["1", "2", "3", "4", "5", "6", "7", "8"];
+  let layer = host.querySelector<HTMLElement>(".board-coordinates");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "board-coordinates";
+    layer.setAttribute("aria-hidden", "true");
+    host.appendChild(layer);
+  }
+  const canvas = host.querySelector("canvas");
+  if (canvas) {
+    const syncBounds = () => {
+      layer!.style.width = `${canvas.clientWidth}px`;
+      layer!.style.height = `${canvas.clientHeight}px`;
+      layer!.style.left = `${canvas.offsetLeft}px`;
+      layer!.style.top = `${canvas.offsetTop}px`;
+    };
+    syncBounds();
+    coordinateObserver?.disconnect();
+    coordinateObserver = new ResizeObserver(syncBounds);
+    coordinateObserver.observe(canvas);
+  }
+  layer.innerHTML = `
+    <div class="board-files">${files.map((file) => `<span>${file}</span>`).join("")}</div>
+    <div class="board-ranks">${ranks.map((rank) => `<span>${rank}</span>`).join("")}</div>`;
 }
 
 function patchGame(): void {
@@ -1463,7 +1618,8 @@ function lobbyPanel(): string {
     ${betPanel()}
     <button class="btn-gold" id="ready" ${!full || state.ready ? "disabled" : ""}>
       ${state.ready ? "Esperando al rival…" : full ? "Listo" : "Falta el rival"}
-    </button>`;
+    </button>
+    <button class="danger leave-room" id="leave-room">Salir de la sala</button>`;
 }
 
 /** ¿Ambos jugadores entraron con Nostr? (requisito para apostar). */
@@ -1651,6 +1807,10 @@ function wireSidePanels(): void {
     if (el) navigator.clipboard.writeText(el.value).then(() => toast("Link copiado"));
   });
   on("ready", () => { state.ready = true; net.ready(); patchSidePanels(); });
+  on("leave-room", () => {
+    const btn = document.getElementById("leave-room") as HTMLButtonElement | null;
+    if (btn) armButton(btn, "¿Confirmar salida?", () => net.leaveRoom());
+  });
   on("bet-propose", () => {
     const input = document.getElementById("bet-stake") as HTMLInputElement | null;
     const stake = Number(input?.value);

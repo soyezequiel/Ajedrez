@@ -137,6 +137,17 @@ export class Room {
     return seat;
   }
 
+  /** Libera un asiento del lobby. El anfitrión cierra la sala desde RoomManager. */
+  leave(npub: Npub): boolean {
+    if (this.phase !== "lobby") throw new RoomError("NOT_LOBBY", "La partida ya arrancó");
+    if (npub === this.hostNpub) throw new RoomError("HOST_LEAVES", "El anfitrión cierra la sala");
+    this.rematchBy.delete(npub);
+    this.drawOfferBy = this.drawOfferBy === npub ? null : this.drawOfferBy;
+    const removed = this.players.delete(npub);
+    if (removed) this.touch();
+    return removed;
+  }
+
   get white(): RoomPlayer | undefined {
     return this.roster.find((p) => p.color === "w");
   }

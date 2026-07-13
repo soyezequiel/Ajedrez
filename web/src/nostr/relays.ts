@@ -66,29 +66,36 @@ export async function fetchProfile(pubkey: string, timeoutMs = 2500): Promise<No
 }
 
 /** Perfiles kind:0 en lote, quedándonos con el evento más reciente por autor. */
-export async function fetchProfiles(pubkeys: string[], timeoutMs = 3500): Promise<Map<string, NostrProfile>> {
+export async function fetchProfiles(
+  pubkeys: string[],
+  onBatch?: (profiles: Map<string, NostrProfile>) => void,
+  timeoutMs = 3500,
+): Promise<Map<string, NostrProfile>> {
   const authors = [...new Set(pubkeys.map((p) => p.trim().toLowerCase()))]
     .filter((p) => /^[0-9a-f]{64}$/.test(p));
   const result = new Map<string, NostrProfile>();
   if (!authors.length) return result;
-  try {
-    const events = await getPool().querySync([...RELAYS.profile], { kinds: [0], authors }, { maxWait: timeoutMs });
-    const newest = new Map<string, (typeof events)[number]>();
-    for (const event of events) {
-      const previous = newest.get(event.pubkey);
-      if (!previous || event.created_at > previous.created_at) newest.set(event.pubkey, event);
-    }
-    for (const [pubkey, event] of newest) {
-      try {
-        const meta = JSON.parse(event.content) as Record<string, unknown>;
-        result.set(pubkey, {
-          name: pickString(meta.display_name) ?? pickString(meta.name),
-          picture: pickString(meta.picture) ?? pickString(meta.image),
-          lud16: pickString(meta.lud16),
-        });
-      } catch { /* metadata inválida */ }
-    }
-  } catch { /* relays best-effort */ }
+  const batches: string[][] = [];
+  for (let i = 0; i < authors.length; i += 100) batches.push(authors.slice(i, i + 100));
+  const newestAt = new Map<string, number>();
+  await Promise.all(batches.map(async (batch) => {
+    try {
+      const events = await getPool().querySync([...RELAYS.profile], { kinds: [0], authors: batch }, { maxWait: timeoutMs });
+      for (const event of events) {
+        if ((newestAt.get(event.pubkey) ?? -1) >= event.created_at) continue;
+        try {
+          const meta = JSON.parse(event.content) as Record<string, unknown>;
+          newestAt.set(event.pubkey, event.created_at);
+          result.set(event.pubkey, {
+            name: pickString(meta.display_name) ?? pickString(meta.name),
+            picture: pickString(meta.picture) ?? pickString(meta.image),
+            lud16: pickString(meta.lud16),
+          });
+        } catch { /* metadata inválida */ }
+      }
+      if (events.length) onBatch?.(result);
+    } catch { /* lote best-effort */ }
+  }));
   return result;
 }
 

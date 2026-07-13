@@ -125,4 +125,19 @@ describe("RoomManager — GC de salas (sweep)", () => {
     rooms.remove("room_inexistente");
     expect(rooms.all()).toHaveLength(0);
   });
+
+  it("libera el asiento del invitado cuando abandona el lobby", () => {
+    const room = new RoomManager().create(HOST);
+    room.join(GUEST);
+    expect(room.leave(GUEST.npub)).toBe(true);
+    expect(room.roster.map((player) => player.npub)).toEqual([HOST.npub]);
+    expect(room.isFull).toBe(false);
+  });
+
+  it("no permite quitar un jugador de una partida en curso", () => {
+    const room = new RoomManager().create(HOST);
+    room.join(GUEST);
+    room.startMatch(0);
+    expect(() => room.leave(GUEST.npub)).toThrow(RoomError);
+  });
 });
