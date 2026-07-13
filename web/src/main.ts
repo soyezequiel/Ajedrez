@@ -654,7 +654,7 @@ function wireNet(): void {
       renderHome();
       return;
     }
-    toast(errorText(m.code));
+    toast(errorText(m.code, m.message));
     // Refrescar el lobby resetea botones que quedaron en estado "cargando"
     // (p. ej. "Creando…" si falló la propuesta de apuesta).
     if (state.room?.phase === "lobby") patchSidePanels();
@@ -1624,10 +1624,20 @@ const ERROR_TEXT: Record<string, string> = {
   BAD_SIG: "La firma Nostr no es válida",
   BAD_JSON: "Algo salió mal en la conexión",
   INTERNAL: "Algo salió mal en el servidor",
+  // Errores del escrow NGE (antes se veían todos como INTERNAL genérico).
+  TIMEOUT: "El escrow no respondió a tiempo — probá de nuevo",
+  PUBLISH_FAILED: "No se pudo contactar a los relays — revisá tu conexión",
+  STAKE_OUT_OF_RANGE: "El monto está fuera del rango permitido por el escrow",
+  RATE_LIMITED: "Demasiadas apuestas seguidas — esperá un momento",
+  NOT_FUNDED: "La apuesta todavía no está fondeada",
 };
 
-function errorText(code: string): string {
-  return ERROR_TEXT[code] ?? `Algo salió mal (${code})`;
+function errorText(code: string, message?: string): string {
+  const known = ERROR_TEXT[code];
+  if (known) return known;
+  // Código no mapeado (típicamente un error nuevo del escrow): mostrar el motivo
+  // real que mandó el server en vez de un genérico opaco.
+  return message?.trim() ? `Error del escrow: ${message}` : `Algo salió mal (${code})`;
 }
 
 const RECONNECT_BANNER_ID = "reconnect-banner";
