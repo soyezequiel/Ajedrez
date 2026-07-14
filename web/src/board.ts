@@ -39,6 +39,33 @@ export function parseFen(fen: string): (string | null)[] {
   return placement;
 }
 
+/** Devuelve el mismo FEN sin la pieza indicada, preservando turno, enroques y relojes. */
+export function fenWithoutPiece(fen: string, index: number): string {
+  if (index < 0 || index >= 64) return fen;
+  const fields = fen.trim().split(/\s+/);
+  const placement = parseFen(fen);
+  placement[index] = null;
+  const ranks: string[] = [];
+  for (let rank = 0; rank < 8; rank++) {
+    let row = "";
+    let empty = 0;
+    for (let file = 0; file < 8; file++) {
+      const code = placement[rank * 8 + file];
+      if (!code) {
+        empty++;
+        continue;
+      }
+      if (empty) { row += empty; empty = 0; }
+      const piece = code[1] ?? "";
+      row += code[0] === "w" ? piece : piece.toLowerCase();
+    }
+    if (empty) row += empty;
+    ranks.push(row);
+  }
+  fields[0] = ranks.join("/");
+  return fields.join(" ");
+}
+
 export function indexToSquare(index: number): string {
   return String.fromCharCode(97 + (index % 8)) + (8 - Math.floor(index / 8));
 }
@@ -164,8 +191,20 @@ export class VexelBoard extends InteractiveBoard {
   private readonly canvasStyleObserver: MutationObserver;
   private failed = false;
   private readonly startupTimer: ReturnType<typeof setTimeout>;
-  private drag: { pointerId: number; from: number; ghost: HTMLImageElement; moved: boolean; startX: number; startY: number } | null = null;
+  private drag: {
+    pointerId: number;
+    from: number;
+    ghost: HTMLImageElement;
+    moved: boolean;
+    startX: number;
+    startY: number;
+    lastTrailX: number;
+    lastTrailY: number;
+    lastTrailAt: number;
+    hoverTarget: number | null;
+  } | null = null;
   private keyboardIndex = squareToIndex("e2");
+  private lastFen = "";
 
   constructor(
     private readonly container: HTMLElement,
@@ -247,15 +286,17 @@ export class VexelBoard extends InteractiveBoard {
   applyFen(fen: string, move?: MovePayload | null): void {
     const previous = this.placement;
     const wasPending = this.pending !== null;
+    const positionChanged = fen !== this.lastFen;
+    this.lastFen = fen;
     this.placement = parseFen(fen);
     this.pending = null;
     this.selected = null;
     this.call("applyFen", ["string"], [fen]);
-    if (!wasPending && move) {
+    if (!wasPending && move && positionChanged) {
       const from = squareToIndex(move.from);
       const to = squareToIndex(move.to);
       const code = previous[from];
-      if (code) this.animateRemote(from, to, code);
+      if (code) this.animateRemote(from, to, code, this.isCapture(from, to, code, previous));
     } else this.layer.querySelector(".piece-ghost.pending")?.remove();
     this.redraw();
   }
@@ -288,6 +329,7 @@ export class VexelBoard extends InteractiveBoard {
   rejectMove(): void {
     const pending = this.pending;
     super.rejectMove();
+    this.restoreRenderedPosition();
     const ghost = this.layer.querySelector<HTMLElement>(".piece-ghost.pending");
     if (ghost && pending) {
       ghost.classList.add("rejected");
@@ -343,13 +385,29 @@ export class VexelBoard extends InteractiveBoard {
     if (!code || !this.isMine(index) || !this.legal.has(index)) return;
     this.selected = index;
     const ghost = document.createElement("img");
-    ghost.className = "piece-ghost";
+    ghost.className = "piece-ghost dragging";
     ghost.src = `/textures/pieces/${code}.png`;
     ghost.alt = "";
     this.layer.appendChild(ghost);
-    this.drag = { pointerId: event.pointerId, from: index, ghost, moved: false, startX: event.clientX, startY: event.clientY };
+    this.hideRenderedPiece(index);
+    this.drag = {
+      pointerId: event.pointerId,
+      from: index,
+      ghost,
+      moved: false,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastTrailX: event.clientX,
+      lastTrailY: event.clientY,
+      lastTrailAt: event.timeStamp,
+      hoverTarget: null,
+    };
     this.canvas.setPointerCapture(event.pointerId);
     this.positionGhost(ghost, event);
+    this.setDragGlow(event);
+    this.layer.classList.add("is-dragging");
+    this.container.classList.add("board-is-dragging");
+    this.showLiftEffect(index);
     this.onFeedback("pickup");
     this.redraw();
   };
@@ -358,22 +416,53 @@ export class VexelBoard extends InteractiveBoard {
     if (!this.drag || this.drag.pointerId !== event.pointerId) return;
     if (Math.hypot(event.clientX - this.drag.startX, event.clientY - this.drag.startY) > 5) this.drag.moved = true;
     this.positionGhost(this.drag.ghost, event);
+    this.setDragGlow(event);
+    if (!this.drag.moved) return;
+    const trailDistance = Math.hypot(event.clientX - this.drag.lastTrailX, event.clientY - this.drag.lastTrailY);
+    if (event.timeStamp - this.drag.lastTrailAt > 24 && trailDistance > 7) {
+      this.emitTrail(this.drag.lastTrailX, this.drag.lastTrailY, event.clientX, event.clientY);
+      this.drag.lastTrailX = event.clientX;
+      this.drag.lastTrailY = event.clientY;
+      this.drag.lastTrailAt = event.timeStamp;
+    }
+    const target = this.eventIndex(event);
+    const legalTarget = this.legal.get(this.drag.from)?.has(target) ? target : null;
+    if (legalTarget !== this.drag.hoverTarget) {
+      this.drag.hoverTarget = legalTarget;
+      this.showDestinationPreview(legalTarget);
+    }
   };
 
   private pointerUp = (event: PointerEvent): void => {
     if (!this.drag || this.drag.pointerId !== event.pointerId) return;
     const drag = this.drag;
     this.drag = null;
+    this.clearDragVisuals();
     const target = this.eventIndex(event);
     if (drag.moved && this.legal.get(drag.from)?.has(target)) this.commitWithGhost(drag.from, target, drag.ghost);
     else {
-      drag.ghost.remove();
-      if (drag.moved) { this.selected = null; this.onFeedback("invalid"); }
+      this.restoreRenderedPosition();
+      if (drag.moved) {
+        drag.ghost.className = "piece-ghost rejected";
+        const origin = this.viewPosition(drag.from);
+        drag.ghost.style.left = `${origin.x}%`;
+        drag.ghost.style.top = `${origin.y}%`;
+        setTimeout(() => drag.ghost.remove(), 190);
+        this.selected = null;
+        this.onFeedback("invalid");
+      } else drag.ghost.remove();
       this.redraw();
     }
   };
 
-  private pointerCancel = (): void => { this.drag?.ghost.remove(); this.drag = null; this.selected = null; this.redraw(); };
+  private pointerCancel = (): void => {
+    this.drag?.ghost.remove();
+    this.drag = null;
+    this.selected = null;
+    this.restoreRenderedPosition();
+    this.clearDragVisuals();
+    this.redraw();
+  };
   private keyDown = (event: KeyboardEvent): void => {
     if (event.key.startsWith("Arrow")) {
       event.preventDefault();
@@ -388,23 +477,35 @@ export class VexelBoard extends InteractiveBoard {
     }
   };
 
+  protected commit(from: number, to: number): void {
+    this.commitWithGhost(from, to, null);
+  }
+
   private commitWithGhost(from: number, to: number, ghost: HTMLImageElement | null): void {
     const code = this.placement[from];
     if (!code) return;
+    this.hideRenderedPiece(from);
+    const capture = this.isCapture(from, to, code, this.placement);
     const pendingGhost = ghost ?? document.createElement("img");
     if (!ghost) {
       pendingGhost.src = `/textures/pieces/${code}.png`;
       pendingGhost.alt = "";
+      pendingGhost.className = "piece-ghost launching";
+      const start = this.viewPosition(from);
+      pendingGhost.style.left = `${start.x}%`;
+      pendingGhost.style.top = `${start.y}%`;
       this.layer.appendChild(pendingGhost);
+      void pendingGhost.getBoundingClientRect();
     }
     pendingGhost.className = "piece-ghost pending";
     const position = this.viewPosition(to);
     pendingGhost.style.left = `${position.x}%`;
     pendingGhost.style.top = `${position.y}%`;
     super.commit(from, to);
+    setTimeout(() => this.showMoveImpact(to, capture), ghost ? 80 : 120);
   }
 
-  private animateRemote(from: number, to: number, code: string): void {
+  private animateRemote(from: number, to: number, code: string, capture: boolean): void {
     const ghost = document.createElement("img");
     ghost.className = "piece-ghost remote-piece";
     ghost.src = `/textures/pieces/${code}.png`;
@@ -419,7 +520,95 @@ export class VexelBoard extends InteractiveBoard {
       ghost.style.top = `${end.y}%`;
       ghost.style.opacity = ".2";
     });
-    setTimeout(() => ghost.remove(), 210);
+    setTimeout(() => this.showMoveImpact(to, capture), 150);
+    setTimeout(() => ghost.remove(), 220);
+  }
+
+  private isCapture(from: number, to: number, code: string, position: (string | null)[]): boolean {
+    if (position[to]) return true;
+    // En passant: un peón que avanza en diagonal captura aunque el destino esté vacío.
+    return code[1] === "P" && from % 8 !== to % 8;
+  }
+
+  private showLiftEffect(index: number): void {
+    const lift = this.marker(index, "piece-lift-effect");
+    this.layer.appendChild(lift);
+    setTimeout(() => lift.remove(), 420);
+  }
+
+  private showDestinationPreview(index: number | null): void {
+    this.layer.querySelector(".move-destination-preview")?.remove();
+    if (index === null) return;
+    const capture = this.placement[index] !== null;
+    this.layer.appendChild(this.marker(index, `move-destination-preview${capture ? " is-capture" : ""}`));
+  }
+
+  private setDragGlow(event: PointerEvent): void {
+    const bounds = this.container.getBoundingClientRect();
+    this.layer.style.setProperty("--drag-x", `${((event.clientX - bounds.left) / bounds.width) * 100}%`);
+    this.layer.style.setProperty("--drag-y", `${((event.clientY - bounds.top) / bounds.height) * 100}%`);
+  }
+
+  private emitTrail(fromX: number, fromY: number, toX: number, toY: number): void {
+    const bounds = this.container.getBoundingClientRect();
+    const x = fromX - bounds.left;
+    const y = fromY - bounds.top;
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const distance = Math.hypot(dx, dy);
+    const segment = document.createElement("span");
+    segment.className = "move-trail-segment";
+    segment.style.left = `${(x / bounds.width) * 100}%`;
+    segment.style.top = `${(y / bounds.height) * 100}%`;
+    segment.style.width = `${(distance / bounds.width) * 100}%`;
+    segment.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    segment.innerHTML = "<i></i>";
+    this.layer.appendChild(segment);
+
+    const spark = document.createElement("span");
+    spark.className = "move-trail-spark";
+    spark.style.left = `${((toX - bounds.left) / bounds.width) * 100}%`;
+    spark.style.top = `${((toY - bounds.top) / bounds.height) * 100}%`;
+    this.layer.appendChild(spark);
+    setTimeout(() => { segment.remove(); spark.remove(); }, 360);
+  }
+
+  private showMoveImpact(index: number, capture: boolean): void {
+    const impact = this.marker(index, `move-impact${capture ? " is-capture" : ""}`);
+    impact.innerHTML = '<span class="move-impact-core"></span><span class="move-impact-ring ring-one"></span><span class="move-impact-ring ring-two"></span>';
+    for (let ray = 0; ray < (capture ? 16 : 12); ray++) {
+      const spark = document.createElement("i");
+      spark.className = "move-impact-spark";
+      spark.style.setProperty("--spark-angle", `${ray * (360 / (capture ? 16 : 12)) + (ray % 2) * 7}deg`);
+      spark.style.setProperty("--spark-distance", `${capture ? 48 + (ray % 4) * 7 : 36 + (ray % 3) * 6}px`);
+      spark.style.setProperty("--spark-delay", `${(ray % 4) * 12}ms`);
+      impact.appendChild(spark);
+    }
+    this.layer.appendChild(impact);
+
+    const flash = document.createElement("span");
+    const position = this.viewPosition(index);
+    const halfCell = (GAME_CELL / GAME_SIZE * 100) / 2;
+    flash.className = `board-move-flash${capture ? " is-capture" : ""}`;
+    flash.style.setProperty("--impact-x", `${position.x + halfCell}%`);
+    flash.style.setProperty("--impact-y", `${position.y + halfCell}%`);
+    this.layer.appendChild(flash);
+
+    setTimeout(() => { impact.remove(); flash.remove(); }, 820);
+  }
+
+  private clearDragVisuals(): void {
+    this.layer.classList.remove("is-dragging");
+    this.layer.querySelector(".move-destination-preview")?.remove();
+    this.container.classList.remove("board-is-dragging");
+  }
+
+  private hideRenderedPiece(index: number): void {
+    if (this.lastFen) this.call("applyFen", ["string"], [fenWithoutPiece(this.lastFen, index)]);
+  }
+
+  private restoreRenderedPosition(): void {
+    if (this.lastFen) this.call("applyFen", ["string"], [this.lastFen]);
   }
 
   private positionGhost(ghost: HTMLElement, event: PointerEvent): void {
@@ -433,6 +622,7 @@ export class VexelBoard extends InteractiveBoard {
     this.canvasStyleObserver.disconnect();
     this.canvas.removeEventListener("keydown", this.keyDown);
     this.script.remove();
+    this.container.classList.remove("board-is-dragging");
     this.layer.remove();
     this.canvas.remove();
   }

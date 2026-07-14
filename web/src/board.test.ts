@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { indexToSquare, parseFen, squareToIndex } from "./board.js";
+import { fenWithoutPiece, indexToSquare, parseFen, squareToIndex } from "./board.js";
 
 describe("geometría del tablero", () => {
   it("convierte todas las casillas en ambos sentidos", () => {
@@ -18,5 +18,12 @@ describe("geometría del tablero", () => {
     expect(squareToIndex("i4")).toBe(-1);
     expect(squareToIndex("a9")).toBe(-1);
     expect(squareToIndex("")).toBe(-1);
+  });
+
+  it("oculta sólo la pieza levantada y preserva el estado del FEN", () => {
+    const fen = "r3k2r/8/8/3pP3/8/8/8/R3K2R w KQkq d6 0 1";
+    const lifted = fenWithoutPiece(fen, squareToIndex("e5"));
+    expect(lifted).toBe("r3k2r/8/8/3p4/8/8/8/R3K2R w KQkq d6 0 1");
+    expect(parseFen(lifted).filter(Boolean)).toHaveLength(parseFen(fen).filter(Boolean).length - 1);
   });
 });

@@ -297,7 +297,7 @@ function readCachedProfile(pubkey: string): { known: boolean; name: string | nul
     const raw = localStorage.getItem(PROFILE_CACHE_KEY);
     if (!raw) return { known: false, name: null, picture: null };
     const parsed = JSON.parse(raw) as { pubkey?: string; name?: string | null; picture?: string | null };
-    if (parsed.pubkey !== pubkey) return { known: false, name: null, picture: null };
+    if (parsed.pubkey?.toLowerCase() !== pubkey.toLowerCase()) return { known: false, name: null, picture: null };
     return { known: true, name: parsed.name ?? null, picture: parsed.picture ?? null };
   } catch {
     return { known: false, name: null, picture: null };
@@ -306,7 +306,7 @@ function readCachedProfile(pubkey: string): { known: boolean; name: string | nul
 
 function writeCachedProfile(pubkey: string, name: string | null, picture: string | null): void {
   try {
-    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ pubkey, name, picture }));
+    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ pubkey: pubkey.toLowerCase(), name, picture }));
   } catch {
     /* storage bloqueado */
   }
@@ -386,9 +386,9 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
   // todavía no se mandó al server.
   profileFetch = fetchProfile(pubkey)
     .then((p) => {
-      writeCachedProfile(pubkey, p.name, p.picture);
-      playerProfiles.set(pubkey, p);
-      if (p.name && login?.kind === "nostr" && !login.displayName) login.displayName = p.name;
+      const profile = mergePlayerProfile(pubkey, p);
+      writeCachedProfile(pubkey, profile.name, profile.picture);
+      if (profile.name && login?.kind === "nostr" && !login.displayName) login.displayName = profile.name;
     })
     .catch(() => {});
   net.connect();
@@ -598,10 +598,17 @@ async function loadSocialData(pubkey: string): Promise<void> {
   }
   friendsLoading = friends.length === 0;
 
-  const ownProfileTask = fetchProfile(pubkey).then((own) => {
-    playerProfiles.set(pubkey, own);
+  // La consulta por lote espera a todos los relays y elige el kind:0 más nuevo;
+  // es más robusta que `get()` para la identidad visible del usuario actual.
+  const normalizedPubkey = pubkey.toLowerCase();
+  const ownProfileTask = fetchProfiles([normalizedPubkey], undefined, 5000).then((profiles) => {
+    const fetched = profiles.get(normalizedPubkey);
+    if (!fetched) return;
+    const own = mergePlayerProfile(normalizedPubkey, fetched);
     writeCachedProfile(pubkey, own.name, own.picture);
-    if (own.name && state.identity?.pubkey === pubkey) state.identity.displayName = own.name;
+    if (own.name && state.identity?.pubkey?.toLowerCase() === normalizedPubkey) state.identity.displayName = own.name;
+    refreshTopbarIdentity();
+    if (state.room) renderPlayers();
   }).catch(() => {});
   try {
     const contacts = (await fetchContacts(pubkey)).slice(0, 1000);
@@ -661,8 +668,15 @@ async function hydrateRoomProfiles(room: RoomView): Promise<void> {
   const missing = pubkeys.filter((pubkey) => !playerProfiles.has(pubkey));
   if (!missing.length) return;
   const profiles = await fetchProfiles(missing);
-  for (const [pubkey, profile] of profiles) playerProfiles.set(pubkey, profile);
+  for (const [pubkey, profile] of profiles) {
+    const merged = mergePlayerProfile(pubkey, profile);
+    if (state.identity?.pubkey?.toLowerCase() === pubkey.toLowerCase()) {
+      writeCachedProfile(pubkey, merged.name, merged.picture);
+      if (merged.name) state.identity.displayName = merged.name;
+    }
+  }
   if (state.room?.id === room.id) patchGame();
+  refreshTopbarIdentity();
 }
 
 /** Si hay un reto pendiente y esta es la sala que creé, lo envío al rival. */
@@ -835,7 +849,21 @@ function wireNet(): void {
     if (m.token) writeSessionToken(m.token); // guarda/rota el token de sesión
     state.identity = m.identity;
     startInbox();
-    if (m.identity.pubkey) void loadSocialData(m.identity.pubkey);
+    if (m.identity.pubkey) {
+      // En el reingreso por token el server puede devolver la npub como nombre.
+      // Aplicar la caché antes del primer render evita mostrarla mientras llegan
+      // los relays; la consulta de fondo refresca luego nombre y avatar.
+      const cachedProfile = readCachedProfile(m.identity.pubkey);
+      if (cachedProfile.known) {
+        playerProfiles.set(m.identity.pubkey, {
+          name: cachedProfile.name,
+          picture: cachedProfile.picture,
+          lud16: null,
+        });
+        if (cachedProfile.name?.trim()) state.identity.displayName = cachedProfile.name.trim();
+      }
+      void loadSocialData(m.identity.pubkey);
+    }
     // Presencia NIP-38 desde el arranque de la sesión (no desde la partida): el
     // jugador aparece presente apenas abre el juego. Idempotente en reconexiones.
     ensurePresence()?.start();
@@ -1089,11 +1117,23 @@ function initials(name: string): string {
 }
 
 function profileFor(pubkey?: string): NostrProfile | null {
-  return pubkey ? playerProfiles.get(pubkey) ?? null : null;
+  return pubkey ? playerProfiles.get(pubkey) ?? playerProfiles.get(pubkey.toLowerCase()) ?? null : null;
+}
+
+/** Conserva datos válidos: un relay lento o vacío nunca borra nombre/foto ya resueltos. */
+function mergePlayerProfile(pubkey: string, incoming: NostrProfile): NostrProfile {
+  const current = profileFor(pubkey);
+  const merged: NostrProfile = {
+    name: incoming.name?.trim() || current?.name?.trim() || null,
+    picture: incoming.picture?.trim() || current?.picture?.trim() || null,
+    lud16: incoming.lud16?.trim() || current?.lud16?.trim() || null,
+  };
+  playerProfiles.set(pubkey.toLowerCase(), merged);
+  return merged;
 }
 
 function visibleName(player: { displayName: string; pubkey?: string }): string {
-  return profileFor(player.pubkey)?.name ?? player.displayName;
+  return profileFor(player.pubkey)?.name?.trim() || player.displayName;
 }
 
 function avatarHtml(name: string, picture: string | null, extraClass = ""): string {
@@ -1384,8 +1424,6 @@ function showGeneratedKey(): void {
 
 function topbar(): string {
   const id = state.identity;
-  const myProfile = profileFor(id?.pubkey);
-  const myName = myProfile?.name ?? id?.displayName ?? "";
   const soundBtn = `<button class="icon-btn" data-action="sound" aria-label="${soundEnabled() ? "Sonido: silenciar" : "Sonido: activar"}" title="Sonido">${soundEnabled() ? "●" : "○"}<span>Sonido</span></button>`;
   const hapticBtn = `<button class="icon-btn haptic-control" data-action="haptics" aria-label="Háptica: alternar respuesta" title="Háptica">${hapticsEnabled() ? "Háptica activa" : "Háptica apagada"}</button>`;
   return `
@@ -1394,8 +1432,22 @@ function topbar(): string {
       <span class="spacer"></span>
       ${soundBtn}
       ${hapticBtn}
-      ${id ? `<span class="me">${avatarHtml(myName, myProfile?.picture ?? null)}${escapeHtml(myName)}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
+      ${id ? `<span class="me" id="current-user">${topbarIdentityHtml()}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
     </header>`;
+}
+
+function topbarIdentityHtml(): string {
+  const id = state.identity;
+  if (!id) return "";
+  const profile = profileFor(id.pubkey);
+  const candidate = profile?.name?.trim() || id.displayName.trim();
+  const name = id.pubkey && (!candidate || /^npub1/i.test(candidate)) ? "Perfil Nostr" : candidate || "Jugador";
+  return `${avatarHtml(name, profile?.picture ?? null)}<span class="me-name">${escapeHtml(name)}</span>`;
+}
+
+function refreshTopbarIdentity(): void {
+  const current = document.getElementById("current-user");
+  if (current) current.innerHTML = topbarIdentityHtml();
 }
 
 // --------------------------------------------------------------- render: home
@@ -2177,8 +2229,10 @@ function endedPanel(): string {
       ${rematchButton()}
       ${login?.kind === "nostr" ? `<details class="next-rival"><summary>Retar a otro</summary>${friendInviteListHtml()}</details>` : ""}
     </div>
+    <div class="result-room-actions">
+      <button class="result-leave-room" id="leave-room">Salir de la sala</button>
+    </div>
     <div class="result-secondary-actions">
-      <button id="home">Ir al club</button>
       ${login?.kind === "nostr" ? `<button id="share-achievement">Compartir</button>` : ""}
       ${zapRivalButton()}
     </div>
@@ -2217,7 +2271,13 @@ function zapRivalButton(): string {
   if (login?.kind !== "nostr") return "";
   const rival = rivalPlayer();
   if (!rival?.pubkey) return "";
-  return `<button id="zap-rival">⚡ Propina a ${rival.displayName}</button>`;
+  const resolvedName = visibleName(rival).trim();
+  const name = !resolvedName || /^npub1/i.test(resolvedName) ? "tu rival" : resolvedName;
+  const picture = profileFor(rival.pubkey)?.picture ?? null;
+  return `<button class="zap-rival-button" id="zap-rival" aria-label="Enviar propina a ${escapeHtml(name)}">
+    ${avatarHtml(name, picture, "zap-rival-avatar")}
+    <span><span class="zap-rival-bolt" aria-hidden="true">⚡</span> Propina a <strong>${escapeHtml(name)}</strong></span>
+  </button>`;
 }
 
 /** Texto del logro según el resultado, para publicar como kind:1. */
@@ -2264,7 +2324,12 @@ function wireSidePanels(): void {
   });
   on("leave-room", () => {
     const btn = document.getElementById("leave-room") as HTMLButtonElement | null;
-    if (btn) armButton(btn, "¿Confirmar salida?", () => net.leaveRoom());
+    if (!btn) return;
+    if (state.ended) {
+      btn.disabled = true;
+      btn.textContent = "Saliendo…";
+      net.leaveRoom();
+    } else armButton(btn, "¿Confirmar salida?", () => net.leaveRoom());
   });
   on("bet-propose", () => {
     const input = document.getElementById("bet-stake") as HTMLInputElement | null;
@@ -2286,7 +2351,6 @@ function wireSidePanels(): void {
   on("offer-draw", () => net.offerDraw()); // el broadcast actualiza el panel
   on("accept-draw", () => net.acceptDraw());
   on("decline-draw", () => net.declineDraw());
-  on("home", () => { clearSavedRoom(); location.reload(); });
   on("rematch", () => {
     state.rematchRequested = true;
     trackUx("rematch_requested");
@@ -2304,14 +2368,17 @@ function wireSidePanels(): void {
   });
   on("zap-rival", () => {
     const rival = rivalPlayer();
-    if (rival?.pubkey) openZapDialog(rival.pubkey, rival.displayName);
+    if (!rival?.pubkey) return;
+    const resolvedName = visibleName(rival).trim();
+    const name = !resolvedName || /^npub1/i.test(resolvedName) ? "tu rival" : resolvedName;
+    openZapDialog(rival.pubkey, name, profileFor(rival.pubkey)?.picture ?? null);
   });
 }
 
 // --------------------------------------------------------------- zaps (propinas)
 
 /** Modal de propina: elegís monto y se genera un invoice para pagar con billetera. */
-function openZapDialog(pubkey: string, name: string): void {
+function openZapDialog(pubkey: string, name: string, picture: string | null): void {
   if (login?.kind !== "nostr") return;
   const signer = login.signer;
   document.getElementById("zap-modal")?.remove();
@@ -2321,7 +2388,10 @@ function openZapDialog(pubkey: string, name: string): void {
   el.innerHTML = `
     <div class="modal">
       <button class="modal-close" id="zap-close">✕</button>
-      <h3>⚡ Propina a ${name}</h3>
+      <div class="zap-dialog-player">
+        ${avatarHtml(name, picture, "zap-dialog-avatar")}
+        <div><span>Enviar propina a</span><h3>${escapeHtml(name)}</h3></div>
+      </div>
       <p class="muted">Elegí un monto. Se genera un invoice que pagás con tu billetera Lightning.</p>
       <div class="zap-amounts">
         ${[21, 100, 500, 1000].map((a) => `<button class="zap-amt" data-sats="${a}">${a} sats</button>`).join("")}
