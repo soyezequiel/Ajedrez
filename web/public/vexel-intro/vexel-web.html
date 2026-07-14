@@ -34,14 +34,34 @@
   <canvas id="vexel-canvas" width="960" height="540" tabindex="0" aria-label="Animación de introducción de Vexel"></canvas>
   <pre id="output" aria-hidden="true"></pre>
   <script>
+    var vexelCanvas = document.getElementById("vexel-canvas");
+    function fitVexelCanvas() {
+      var width = Math.min(window.innerWidth, window.innerHeight * 16 / 9);
+      var height = width * 9 / 16;
+      var nextWidth = width + "px";
+      var nextHeight = height + "px";
+      if (vexelCanvas.style.getPropertyValue("width") !== nextWidth) {
+        vexelCanvas.style.setProperty("width", nextWidth, "important");
+      }
+      if (vexelCanvas.style.getPropertyValue("height") !== nextHeight) {
+        vexelCanvas.style.setProperty("height", nextHeight, "important");
+      }
+    }
+    new MutationObserver(fitVexelCanvas).observe(vexelCanvas, { attributes: true, attributeFilter: ["style"] });
+    window.addEventListener("resize", fitVexelCanvas);
+    fitVexelCanvas();
+
     var Module = {
-      canvas: document.getElementById("vexel-canvas"),
+      canvas: vexelCanvas,
       print: function (text) {
         document.getElementById("output").textContent += text + "\n";
         console.log(text);
       },
       printErr: function (text) { console.error(text); },
-      onRuntimeInitialized: function () { document.body.classList.add("is-running"); }
+      onRuntimeInitialized: function () {
+        fitVexelCanvas();
+        document.body.classList.add("is-running");
+      }
     };
     Module.canvas.addEventListener("click", function () { Module.canvas.focus(); });
   </script>
