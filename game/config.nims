@@ -21,10 +21,16 @@ when defined(emscripten):
   switch("passL", "-o bin/ajedrez.html")
   switch("passL", "--shell-file shell.html")
   switch("passL", "--preload-file shaders")
-  switch("passL", "--preload-file textures")
+  switch("passL", "--preload-file textures/board.png")
+  switch("passL", "--preload-file textures/highlight.png")
+  switch("passL", "--preload-file textures/select.png")
+  switch("passL", "--preload-file textures/pieces")
+  switch("passL", "--preload-file textures/effects")
+  switch("passL", "--preload-file textures/coordinates")
+  switch("passL", "--preload-file textures/countdown")
 
   # Interop JS↔WASM: exponer las funciones del juego y ccall/cwrap.
-  switch("passL", "-sEXPORTED_FUNCTIONS=_main,_applyFen,_setInteractive,_clickAt,_setOrientation,_highlight")
+  switch("passL", "-sEXPORTED_FUNCTIONS=_main,_applyFen,_applyFenAnimated,_setInteractive,_setOrientation,_highlight,_setLegalMoves,_pointerDown,_pointerMove,_pointerUp,_pointerCancel,_keyInput,_setKeyboardFocus,_rejectMove,_confirmMove,_showCountdown")
   switch("passL", "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap")
   switch("passL", "-sALLOW_MEMORY_GROWTH=1")
 

@@ -209,7 +209,6 @@ const state: State = {
 };
 
 let board: BoardController | null = null;
-let coordinateObserver: ResizeObserver | null = null;
 let pendingMove: { requestId: string; from: string; to: string } | null = null;
 /** null = posición autoritativa en vivo; número = ply histórico seleccionado. */
 let viewedHistoryPly: number | null = null;
@@ -1717,8 +1716,6 @@ function sendChallengeFromHome(): void {
 function enterGame(): void {
   board?.destroy();
   board = null;
-  coordinateObserver?.disconnect();
-  coordinateObserver = null;
   document.body.classList.add("game-active");
   state.ended = null;
   state.myRating = null;
@@ -1756,8 +1753,6 @@ function enterGame(): void {
     if (failureHandled) return;
     failureHandled = true;
     console.error(`[chess-board] Vexel no pudo iniciar: ${reason}`);
-    coordinateObserver?.disconnect();
-    coordinateObserver = null;
     board?.destroy();
     board = null;
     boardHost.replaceChildren();
@@ -1783,19 +1778,14 @@ function submitMove(from: string, to: string, promotion?: "q" | "r" | "b" | "n")
 }
 
 function showCountdown(): void {
-  document.getElementById("match-countdown")?.remove();
-  const overlay = document.createElement("div");
-  overlay.id = "match-countdown";
-  overlay.className = "match-countdown";
-  overlay.setAttribute("aria-live", "assertive");
-  document.getElementById("board-wrap")?.appendChild(overlay);
   board?.setInteractive(false);
+  board?.showCountdown();
   const beats = ["3", "2", "1", "Jugá"];
   beats.forEach((beat, index) => setTimeout(() => {
-    overlay.textContent = beat;
+    announce(beat);
     playSound(index === beats.length - 1 ? "start" : "ui");
   }, index * 320));
-  setTimeout(() => { overlay.remove(); renderBoardFromMatch(); }, beats.length * 320 + 120);
+  setTimeout(() => renderBoardFromMatch(), beats.length * 320 + 120);
 }
 
 /** ¿La jugada es un peón llegando a la última fila? (mirando el FEN actual). */
@@ -1903,7 +1893,6 @@ function renderBoardFromMatch(): void {
   if (!board) return;
   const color = myColor() ?? "w";
   board.setOrientation(color);
-  renderBoardCoordinates(color);
   document.getElementById("history-review-badge")?.remove();
   if (state.match) {
     const latestPly = state.match.sanHistory.length;
@@ -1949,36 +1938,6 @@ function legalTargets(fen: string, color: Color): LegalTargets {
     }
   }
   return targets;
-}
-
-function renderBoardCoordinates(color: Color): void {
-  const host = document.getElementById("board-wrap");
-  if (!host) return;
-  const files = color === "w" ? [..."abcdefgh"] : [..."hgfedcba"];
-  const ranks = color === "w" ? ["8", "7", "6", "5", "4", "3", "2", "1"] : ["1", "2", "3", "4", "5", "6", "7", "8"];
-  let layer = host.querySelector<HTMLElement>(".board-coordinates");
-  if (!layer) {
-    layer = document.createElement("div");
-    layer.className = "board-coordinates";
-    layer.setAttribute("aria-hidden", "true");
-    host.appendChild(layer);
-  }
-  const canvas = host.querySelector("canvas");
-  if (canvas) {
-    const syncBounds = () => {
-      layer!.style.width = `${canvas.clientWidth}px`;
-      layer!.style.height = `${canvas.clientHeight}px`;
-      layer!.style.left = `${canvas.offsetLeft}px`;
-      layer!.style.top = `${canvas.offsetTop}px`;
-    };
-    syncBounds();
-    coordinateObserver?.disconnect();
-    coordinateObserver = new ResizeObserver(syncBounds);
-    coordinateObserver.observe(canvas);
-  }
-  layer.innerHTML = `
-    <div class="board-files">${files.map((file) => `<span>${file}</span>`).join("")}</div>
-    <div class="board-ranks">${ranks.map((rank) => `<span>${rank}</span>`).join("")}</div>`;
 }
 
 function patchGame(): void {
