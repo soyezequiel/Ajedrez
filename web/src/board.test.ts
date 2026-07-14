@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fenWithoutPiece, indexToSquare, parseFen, squareToIndex } from "./board.js";
+import { acceptsBoardInput, fenWithoutPiece, indexToSquare, parseFen, squareToIndex } from "./board.js";
 
 describe("geometría del tablero", () => {
   it("convierte todas las casillas en ambos sentidos", () => {
@@ -25,5 +25,11 @@ describe("geometría del tablero", () => {
     const lifted = fenWithoutPiece(fen, squareToIndex("e5"));
     expect(lifted).toBe("r3k2r/8/8/3p4/8/8/8/R3K2R w KQkq d6 0 1");
     expect(parseFen(lifted).filter(Boolean)).toHaveLength(parseFen(fen).filter(Boolean).length - 1);
+  });
+
+  it("bloquea el input si el tablero no está habilitado o hay una jugada pendiente", () => {
+    expect(acceptsBoardInput(false, false)).toBe(false);
+    expect(acceptsBoardInput(true, true)).toBe(false);
+    expect(acceptsBoardInput(true, false)).toBe(true);
   });
 });

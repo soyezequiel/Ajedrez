@@ -67,6 +67,11 @@ export function squareToIndex(square: string): number {
   return (8 - Number(square[1])) * 8 + square.charCodeAt(0) - 97;
 }
 
+/** El puente JS bloquea el input sin depender del estado asíncrono de WASM. */
+export function acceptsBoardInput(interactive: boolean, pending: boolean): boolean {
+  return interactive && !pending;
+}
+
 
 declare global {
   interface Window {
@@ -91,6 +96,7 @@ export class VexelBoard implements BoardController {
   private placement: (string | null)[] = new Array(64).fill(null);
   private lastFen = "";
   private pending = false;
+  private interactive = false;
 
   constructor(
     container: HTMLElement,
@@ -127,7 +133,14 @@ export class VexelBoard implements BoardController {
     canvas.addEventListener("blur", this.blur);
 
     window.__chess = {
-      onMove: (from, to, promo) => { this.pending = true; onMove(from, to, promo); },
+      onMove: (from, to, promo) => {
+        if (!acceptsBoardInput(this.interactive, this.pending)) {
+          this.call("rejectMove", [], []);
+          return;
+        }
+        this.pending = true;
+        onMove(from, to, promo);
+      },
       onFeedback,
       onVexelReady: () => {
         clearTimeout(this.startupTimer);
@@ -206,6 +219,8 @@ export class VexelBoard implements BoardController {
   }
 
   setInteractive(on: boolean): void {
+    this.interactive = on;
+    if (!on) this.cancelActivePointer();
     this.call("setInteractive", ["number"], [on ? 1 : 0]);
   }
 
@@ -239,7 +254,19 @@ export class VexelBoard implements BoardController {
     this.call("confirmMove", [], []);
   }
 
+  private cancelActivePointer(): void {
+    if (this.pointerId === null) return;
+    if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
+    this.pointerFrame = null;
+    this.pendingPointerMove = null;
+    this.call("pointerCancel", [], []);
+    if (this.canvas.hasPointerCapture(this.pointerId)) this.canvas.releasePointerCapture(this.pointerId);
+    this.pointerId = null;
+    this.pointerBounds = null;
+  }
+
   private pointerDown = (event: PointerEvent): void => {
+    if (!acceptsBoardInput(this.interactive, this.pending)) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     this.pointerId = event.pointerId;
     this.pointerBounds = this.canvas.getBoundingClientRect();
@@ -250,12 +277,17 @@ export class VexelBoard implements BoardController {
   };
 
   private pointerMove = (event: PointerEvent): void => {
+    if (!acceptsBoardInput(this.interactive, this.pending)) return;
     if (this.pointerId !== event.pointerId) return;
     this.pendingPointerMove = this.coordinates(event);
     if (this.pointerFrame === null) this.pointerFrame = requestAnimationFrame(this.flushPointerMove);
   };
 
   private pointerUp = (event: PointerEvent): void => {
+    if (!acceptsBoardInput(this.interactive, this.pending)) {
+      this.cancelActivePointer();
+      return;
+    }
     if (this.pointerId !== event.pointerId) return;
     if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
     this.pointerFrame = null;
@@ -269,15 +301,11 @@ export class VexelBoard implements BoardController {
 
   private pointerCancel = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
-    if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
-    this.pointerFrame = null;
-    this.pendingPointerMove = null;
-    this.call("pointerCancel", [], []);
-    this.pointerId = null;
-    this.pointerBounds = null;
+    this.cancelActivePointer();
   };
 
   private keyDown = (event: KeyboardEvent): void => {
+    if (!acceptsBoardInput(this.interactive, this.pending)) return;
     const codes: Record<string, number> = {
       ArrowLeft: 0, ArrowRight: 1, ArrowUp: 2, ArrowDown: 3, Enter: 4, " ": 4, Escape: 5,
     };

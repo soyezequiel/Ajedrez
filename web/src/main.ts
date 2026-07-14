@@ -98,6 +98,35 @@ function clearSavedRoom(): void {
   }
 }
 
+/**
+ * Vuelve al inicio sin recargar la pestaña. La identidad, el WebSocket y el
+ * firmante BAL pertenecen a la sesión del juego, no a una sala particular.
+ */
+function leaveRoomLocally(reason?: string): void {
+  clearSavedRoom();
+  board?.destroy();
+  board = null;
+  state.room = null;
+  state.match = null;
+  state.matchReceivedAt = 0;
+  state.ready = false;
+  state.drawOfferBy = null;
+  state.ended = null;
+  state.myRating = null;
+  state.rematchRequested = false;
+  state.rematchOffer = null;
+  state.bet = null;
+  state.myBetInvoice = null;
+  state.newlyEarned = [];
+  pendingMove = null;
+  viewedHistoryPly = null;
+  clockAlertMatchId = "";
+  ownClockAlertLevel = 0;
+  document.body.classList.remove("celebrate-win", "celebrate-loss");
+  renderHome();
+  if (reason) toast(reason);
+}
+
 /** Cómo está autenticado el jugador en esta sesión (para re-auth al reconectar). */
 type LoginMode =
   | { kind: "guest"; name: string }
@@ -550,8 +579,8 @@ function loginLocal(nsec?: string): void {
 
 /** Cierra la sesión (Nostr o invitado) y vuelve al login. */
 function logout(): void {
-  // El logout explícito sí olvida el launcher. Los reloads internos (p. ej. al
-  // salir de una sala) usan logoutBal() sin esta opción para poder reconectar BAL.
+  // El logout explícito sí olvida el launcher. Los teardown transitorios usan
+  // logoutBal() sin esta opción para poder renegociar BAL si la página se recarga.
   void logoutBal({ forgetLauncher: true });
   clearActiveSigner();
   clearSessionToken();
@@ -1673,13 +1702,10 @@ function wireFriendInviteButtons(): void {
     button.addEventListener("click", () => void inviteFriend(button.dataset.invitePubkey ?? "", button));
   });
   net.on("left_room", () => {
-    clearSavedRoom();
-    location.reload();
+    leaveRoomLocally();
   });
   net.on("room_closed", (m) => {
-    clearSavedRoom();
-    try { sessionStorage.setItem("ajedrez.flash.v1", m.reason); } catch { /* noop */ }
-    location.reload();
+    leaveRoomLocally(m.reason);
   });
 }
 
@@ -1833,7 +1859,10 @@ function enterGame(): void {
 }
 
 function submitMove(from: string, to: string, promotion?: "q" | "r" | "b" | "n"): void {
-  if (pendingMove) return;
+  if (pendingMove || state.room?.phase !== "playing" || !state.match) {
+    board?.rejectMove();
+    return;
+  }
   const requestId = crypto.randomUUID?.() ?? `move_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   pendingMove = { requestId, from, to };
   net.move(requestId, from, to, promotion);
@@ -1957,6 +1986,7 @@ function renderBoardFromMatch(): void {
   board.setOrientation(color);
   document.getElementById("history-review-badge")?.remove();
   if (state.match) {
+    const isPlaying = state.room?.phase === "playing";
     const latestPly = state.match.sanHistory.length;
     const selectedPly = activeHistoryPly();
     if (selectedPly < latestPly) {
@@ -1978,8 +2008,8 @@ function renderBoardFromMatch(): void {
     board.applyFen(state.match.fen, state.match.lastMove);
     const last = state.match.lastMove;
     board.highlight(last ? [last.from, last.to] : []);
-    board.setLegalTargets(legalTargets(state.match.fen, color));
-    const myTurn = state.match.turn === color && state.match.result.kind === "ongoing";
+    board.setLegalTargets(isPlaying ? legalTargets(state.match.fen, color) : {});
+    const myTurn = isPlaying && state.match.turn === color && state.match.result.kind === "ongoing";
     board.setInteractive(myTurn && !pendingMove);
   } else {
     board.applyFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1");

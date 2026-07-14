@@ -34,10 +34,10 @@ function validLauncherOrigin(raw: string | null): string | null {
 }
 
 /**
- * `cleanUrl()` quita `lnOrigin` después de autenticar y salir de una sala recarga
- * la página. BAL, en cambio, necesita ese origen para volver a negociar el
- * firmante efímero. Lo conservamos por pestaña: no contiene credenciales y cada
- * mensaje sigue validando tanto `event.origin` como `event.source`.
+ * `cleanUrl()` quita `lnOrigin` después de autenticar, pero un F5 o una recarga por
+ * deploy todavía necesita ese origen para volver a negociar el firmante efímero.
+ * Lo conservamos por pestaña: no contiene credenciales y cada mensaje sigue
+ * validando tanto `event.origin` como `event.source`.
  */
 function launcherOrigin(): string | null {
   const fromUrl = validLauncherOrigin(new URLSearchParams(location.search).get("lnOrigin"));
