@@ -20,7 +20,15 @@ import {
   waitForNip07,
   type ChessSigner,
 } from "./nostr/signer-core.js";
-import { logoutBal, requestBalLauncherFocus, tryBalLogin } from "./nostr/bal-login.js";
+import {
+  getBalSignerStatus,
+  hasBalLauncherContext,
+  logoutBal,
+  requestBalLauncherFocus,
+  subscribeBalSignerStatus,
+  tryBalLogin,
+  type BalSignerPhase,
+} from "./nostr/bal-login.js";
 import { connectBunker, startNostrConnect } from "./nostr/signer-nip46.js";
 import QRCode from "qrcode";
 import { fetchProfile, fetchProfiles, type NostrProfile } from "./nostr/relays.js";
@@ -263,6 +271,7 @@ function pendingJoin(): string | null {
 
 function start(): void {
   startVersionGuard(toast); // recarga sola si el server anuncia un build nuevo
+  subscribeBalSignerStatus(refreshBalSignerStatus);
   try {
     const flash = sessionStorage.getItem("ajedrez.flash.v1");
     if (flash) {
@@ -305,9 +314,7 @@ function start(): void {
 }
 
 async function startLoginFlow(): Promise<void> {
-  // BAL tiene prioridad cuando Luna Negra conserva el canal opener. No usamos un
-  // token viejo: get_public_key debe fijar la identidad activa elegida por Luna.
-  const balSigner = await tryBalLogin(
+  const connectBal = () => tryBalLogin(
     () => {
       clearActiveSigner();
       clearSessionToken();
@@ -317,6 +324,24 @@ async function startLoginFlow(): Promise<void> {
     },
     renderBalConsentRequired,
   );
+
+  // Un reload no debe esperar las rondas NIP-46 por relays. El token restaura la
+  // sesión del server de inmediato y BAL se renegocia en paralelo para presencia,
+  // retos y firmas. El lazy signer espera esa promesa sólo cuando una feature lo usa.
+  const token = readSessionToken();
+  if (token) {
+    const restorePromise = hasBalLauncherContext()
+      ? connectBal().then((signer) => {
+          if (signer) setEphemeralActiveSigner(signer);
+          return signer;
+        })
+      : restoreSigner();
+    authViaToken(token, restorePromise);
+    return;
+  }
+
+  // Primer ingreso sin token: BAL sí debe fijar la identidad antes del challenge.
+  const balSigner = await connectBal();
   if (balSigner) {
     clearSessionToken();
     setEphemeralActiveSigner(balSigner);
@@ -324,9 +349,6 @@ async function startLoginFlow(): Promise<void> {
     return;
   }
 
-  // Con token: sesión inmediata sin depender del firmador (se restaura de fondo).
-  const token = readSessionToken();
-  if (token) return authViaToken(token);
   // Sin token pero con firmador guardado (raro): restaurar y firmar el challenge.
   if (hasStoredSigner()) return void restoreNostr();
   const name = storedName();
@@ -498,11 +520,19 @@ function lazySigner(p: Promise<ChessSigner | null>): ChessSigner {
  * firmador), y restaura el firmador en segundo plano para las features Nostr. Así
  * la sesión no se pierde aunque la extensión tarde o se cuelgue en getPublicKey.
  */
-function authViaToken(token: string): void {
+function authViaToken(
+  token: string,
+  restorePromise: Promise<ChessSigner | null> = restoreSigner(),
+): void {
   renderConnecting();
-  const restorePromise = restoreSigner();
   const lazy = lazySigner(restorePromise);
-  login = { kind: "nostr", signer: toNgpSigner(lazy), rawSigner: lazy, displayName: "" };
+  const tokenLogin: LoginMode = {
+    kind: "nostr",
+    signer: toNgpSigner(lazy),
+    rawSigner: lazy,
+    displayName: "",
+  };
+  login = tokenLogin;
   net.connect();
   net.authToken(token);
   restorePromise
@@ -510,9 +540,9 @@ function authViaToken(token: string): void {
       // Reemplazamos el firmador perezoso por el real para las features, sin llamar
       // getPublicKey/perfil acá: la sesión ya vale por token. La primera firma llega
       // con la presencia (al autenticar), que con extensión puede promptar al abrir.
-      if (s && login?.kind === "nostr") {
-        login.signer = toNgpSigner(s);
-        login.rawSigner = s;
+      if (s && login === tokenLogin) {
+        tokenLogin.signer = toNgpSigner(s);
+        tokenLogin.rawSigner = s;
       }
     })
     .catch(() => {});
@@ -1517,6 +1547,48 @@ function showGeneratedKey(): void {
 
 // --------------------------------------------------------------- render: topbar
 
+const BAL_STATUS_LABELS: Record<Exclude<BalSignerPhase, "idle">, string> = {
+  connecting: "Conectando con Luna",
+  reconnecting: "Reconectando signer",
+  awaiting_approval: "Esperando permiso",
+  connected: "Signer conectado",
+  signing: "Firmando evento",
+  encrypting: "Cifrando datos",
+  decrypting: "Descifrando datos",
+  signed: "Firma lista",
+  disconnecting: "Desconectando",
+  disconnected: "Signer desconectado",
+  rejected: "Solicitud rechazada",
+  error: "Error del signer",
+};
+
+function balSignerStatusHtml(): string {
+  const status = getBalSignerStatus();
+  if (status.phase === "idle") return "";
+  const label = BAL_STATUS_LABELS[status.phase];
+  const title = status.detail ? `${label} · ${status.detail}` : label;
+  const alert = status.phase === "rejected" || status.phase === "error";
+  return `<span class="bal-signer-status is-${status.phase}" id="bal-signer-status" role="status" aria-live="polite" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}">
+    <span class="bal-signer-glyph" aria-hidden="true"><i></i>${alert ? "<b>!</b>" : ""}</span>
+    <span class="bal-signer-copy">${label}</span>
+  </span>`;
+}
+
+function refreshBalSignerStatus(): void {
+  const current = document.getElementById("bal-signer-status");
+  const html = balSignerStatusHtml();
+  if (current && html) {
+    current.outerHTML = html;
+    return;
+  }
+  if (current) {
+    current.remove();
+    return;
+  }
+  if (!html) return;
+  document.querySelector(".topbar .brand")?.insertAdjacentHTML("afterend", html);
+}
+
 function topbar(): string {
   const id = state.identity;
   const technologyBtn = `<button class="icon-btn technology-button" data-action="technology" aria-label="Tecnología usada: Vexel" title="Tecnología usada">
@@ -1527,6 +1599,7 @@ function topbar(): string {
   return `
     <header class="topbar">
       <span class="brand"><span class="mark">A</span><span>Ajedrez<small>Club social</small></span></span>
+      ${balSignerStatusHtml()}
       <span class="spacer"></span>
       ${technologyBtn}
       ${soundBtn}

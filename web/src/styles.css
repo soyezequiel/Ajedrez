@@ -647,6 +647,48 @@ body::before {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), 0 5px 20px rgba(216,169,78,.18);
 }
 .brand small { display: block; margin-top: 4px; color: var(--faint); font: 500 9px/1 var(--sans); letter-spacing: 1.6px; text-transform: uppercase; }
+.bal-signer-status {
+  width: 168px; height: 34px; flex: 0 0 168px; min-width: 0; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 8px; overflow: hidden;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  background: rgba(255,255,255,.025); color: var(--muted);
+  font: 600 10px/1 var(--mono); letter-spacing: .15px;
+  transition: color .18s, border-color .18s, background .18s;
+}
+.bal-signer-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bal-signer-glyph {
+  position: relative; display: grid; place-items: center; flex: 0 0 18px;
+  width: 18px; height: 18px; border: 1px solid currentColor; border-radius: 50%;
+}
+.bal-signer-glyph i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.bal-signer-glyph b { position: absolute; inset: 0; display: grid; place-items: center; font: 800 10px/1 var(--sans); }
+.bal-signer-status.is-connected,
+.bal-signer-status.is-signed { color: #a8c795; border-color: rgba(125,155,106,.48); background: rgba(125,155,106,.09); }
+.bal-signer-status.is-awaiting_approval { color: #efd08c; border-color: rgba(216,169,78,.48); background: rgba(216,169,78,.09); }
+.bal-signer-status.is-connecting,
+.bal-signer-status.is-reconnecting,
+.bal-signer-status.is-signing,
+.bal-signer-status.is-encrypting,
+.bal-signer-status.is-decrypting,
+.bal-signer-status.is-disconnecting { color: #e3bd70; border-color: rgba(216,169,78,.4); background: rgba(216,169,78,.07); }
+.bal-signer-status.is-rejected,
+.bal-signer-status.is-error { color: #e5a08f; border-color: var(--danger-line); background: rgba(122,68,56,.12); }
+.bal-signer-status.is-rejected .bal-signer-glyph i,
+.bal-signer-status.is-error .bal-signer-glyph i { display: none; }
+.bal-signer-status.is-disconnected { color: var(--faint); }
+.bal-signer-status:is(.is-connecting,.is-reconnecting,.is-signing,.is-encrypting,.is-decrypting,.is-disconnecting) .bal-signer-glyph {
+  border-right-color: transparent; animation: bal-signer-spin .9s linear infinite;
+}
+.bal-signer-status:is(.is-connected,.is-signed) .bal-signer-glyph::after {
+  content: ""; position: absolute; inset: -1px; border: 1px solid currentColor; border-radius: 50%;
+  animation: bal-signer-ping 1.6s ease-out infinite;
+}
+.bal-signer-status.is-awaiting_approval .bal-signer-glyph { animation: bal-signer-pulse 1.25s ease-in-out infinite; }
+.bal-signer-status:is(.is-rejected,.is-error) .bal-signer-glyph { animation: bal-signer-alert .32s ease-out; }
+@keyframes bal-signer-spin { to { transform: rotate(360deg); } }
+@keyframes bal-signer-ping { 75%,100% { transform: scale(1.6); opacity: 0; } }
+@keyframes bal-signer-pulse { 50% { opacity: .45; transform: scale(.88); } }
+@keyframes bal-signer-alert { 35% { transform: translateX(-2px); } 70% { transform: translateX(2px); } }
 .icon-btn { min-height: 34px; padding: 5px 10px; display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; background: transparent; }
 .icon-btn > span { font-size: 11px; }
 .haptic-control { font-size: 10px; }
@@ -928,6 +970,8 @@ body.celebrate-loss .result-card { animation: loss-card .55s ease-out; }
 }
 
 @media (max-width: 820px) {
+  .bal-signer-status { width: 34px; flex-basis: 34px; padding: 0; justify-content: center; }
+  .bal-signer-copy { display: none; }
   .home { grid-template-columns: 1fr; align-content: start; gap: 48px; padding-top: 54px; }
   .social-hub { padding-left: 20px; }
   .home-title { font-size: 54px; }
