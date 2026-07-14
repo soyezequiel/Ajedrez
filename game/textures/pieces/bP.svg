@@ -1,4 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-    <defs><linearGradient id="face" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#314b3b"/><stop offset="1" stop-color="#17241d"/></linearGradient></defs>
-    <g fill="url(#face)" stroke="#07100b" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><circle cx="32" cy="17" r="8"/><path d="M25 25h14l3 17H22z"/><path d="M18 44h28l3 7H15z"/><rect x="12" y="51" width="40" height="6" rx="2"/></g>
+    <defs>
+      <linearGradient id="face" x1="0" y1="0" x2=".8" y2="1">
+        <stop stop-color="#45624f"/><stop offset=".52" stop-color="#20372b"/><stop offset="1" stop-color="#17291f"/>
+      </linearGradient>
+    </defs>
+    <g fill="url(#face)" stroke="#07130d" stroke-width="2.35" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"><circle cx="32" cy="17" r="8.5"/><path d="M26 25h12l2 5-4 4 5 12H23l5-12-4-4z"/><path d="M19 45h26l4 7H15z"/><rect x="12" y="52" width="40" height="5" rx="2"/></g>
+    <g fill="none" stroke="#6f8d76" stroke-opacity=".72" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"><path d="M26 30h12M24 46h16"/></g>
   </svg>

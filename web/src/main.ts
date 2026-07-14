@@ -1,8 +1,10 @@
 import "./styles.css";
 import { WS_URL } from "./config.js";
 import { Net } from "./net.js";
-import { createBoard, type BoardController, type BoardKind, type LegalTargets, type MoveFn } from "./board.js";
+import { createBoard, type BoardController, type LegalTargets, type MoveFn } from "./board.js";
 import { Chess, type Square } from "chess.js";
+import { buildHistoryPositions, type HistoryPosition } from "./history.js";
+import { clockAriaLabel, clockUrgency, formatClockMs } from "./clock.js";
 import {
   clearActiveSigner,
   createNip07Signer,
@@ -61,6 +63,11 @@ import type {
 } from "./protocol.js";
 
 const NAME_KEY = "ajedrez.name.v1";
+const CLOCK_OPTIONS = [1, 3, 5, 10, 15, 30] as const;
+
+function createConfiguredRoom(): void {
+  net.createRoom();
+}
 
 /** Sala actual persistida por pestaña: un F5 en el lobby/partida re-une a la sala
  *  (el server re-admite por identidad estable y cancela el timer de abandono).
@@ -204,11 +211,10 @@ const state: State = {
 let board: BoardController | null = null;
 let coordinateObserver: ResizeObserver | null = null;
 let pendingMove: { requestId: string; from: string; to: string } | null = null;
-let vexelUnavailable = false;
-
-function boardKind(): BoardKind {
-  return vexelUnavailable || new URLSearchParams(location.search).get("board") === "canvas" ? "canvas" : "vexel";
-}
+/** null = posición autoritativa en vivo; número = ply histórico seleccionado. */
+let viewedHistoryPly: number | null = null;
+let clockAlertMatchId = "";
+let ownClockAlertLevel: 0 | 1 | 2 = 0;
 
 // --------------------------------------------------------------- arranque
 
@@ -672,8 +678,17 @@ function maybeSendPendingChallenge(room: RoomView): void {
     joinUrl,
     message: `${state.identity?.displayName ?? "Alguien"} te reta a una partida de ajedrez`,
   })
-    .then(() => { trackUx("challenge_sent"); toast("Reto enviado ♟"); })
-    .catch(() => toast("No se pudo enviar el reto"));
+    .then(() => {
+      trackUx("challenge_sent");
+      showInviteButtonResult(toPubkey, "sent");
+      playFeedback("invite");
+      toast("Reto enviado ♟");
+    })
+    .catch(() => {
+      showInviteButtonResult(toPubkey, "error");
+      playFeedback("invalid");
+      toast("No se pudo enviar el reto");
+    });
 }
 
 /** Banner de reto entrante con acción de aceptar. */
@@ -704,6 +719,7 @@ async function enrichInvitePopup(roomId: string, pubkey: string): Promise<void> 
   const profile = (await fetchProfiles([pubkey])).get(pubkey);
   const current = document.getElementById("challenge-banner");
   if (!profile || current?.dataset.roomId !== roomId) return;
+  if (current.classList.contains("is-joining")) return;
   showInvitePopup({ roomId, name: profile.name ?? `npub…${pubkey.slice(-8)}`, picture: profile.picture });
 }
 
@@ -716,19 +732,68 @@ function showInvitePopup(invite: { roomId: string; name: string; picture: string
   el.dataset.roomId = invite.roomId;
   el.innerHTML = `
     ${avatarHtml(invite.name, invite.picture, "invite-avatar")}
-    <span class="challenge-text"><b>${escapeHtml(invite.name)}</b> te invitó a jugar ajedrez</span>
+    <span class="challenge-text"><b>${escapeHtml(invite.name)}</b><span class="challenge-message">te invitó a jugar ajedrez</span></span>
     <span class="challenge-actions">
-      <button class="btn-gold" id="challenge-accept">Unirme</button>
+      <button class="btn-gold challenge-accept" id="challenge-accept" aria-live="polite">Unirme</button>
       <button id="challenge-dismiss">Ignorar</button>
     </span>`;
   document.body.appendChild(el);
   const close = () => el.remove();
   el.querySelector("#challenge-dismiss")!.addEventListener("click", close);
   el.querySelector("#challenge-accept")!.addEventListener("click", () => {
-    close();
+    if (el.classList.contains("is-joining")) return;
+    const accept = el.querySelector<HTMLButtonElement>("#challenge-accept")!;
+    const dismiss = el.querySelector<HTMLButtonElement>("#challenge-dismiss")!;
+    el.classList.remove("join-error");
+    el.classList.add("is-joining");
+    accept.disabled = true;
+    dismiss.disabled = true;
+    accept.setAttribute("aria-label", "Entrando a la partida");
+    accept.innerHTML = '<span class="invite-button-spinner" aria-hidden="true"></span><span>Entrando…</span>';
+    el.querySelector<HTMLElement>(".challenge-message")!.textContent = "te está guardando un lugar en la mesa";
+    playFeedback("ui");
+    announce(`Entrando a la partida de ${invite.name}`);
     trackUx("challenge_accepted");
     if (invite.roomId) net.enterRoom(invite.roomId);
   });
+}
+
+function completeInviteJoin(roomId: string): void {
+  const el = document.getElementById("challenge-banner");
+  if (el?.dataset.roomId !== roomId || !el.classList.contains("is-joining")) return;
+  const accept = el.querySelector<HTMLButtonElement>("#challenge-accept");
+  el.classList.remove("is-joining");
+  el.classList.add("is-joined");
+  if (accept) {
+    accept.setAttribute("aria-label", "Ingresaste a la partida");
+    accept.innerHTML = '<span class="challenge-join-check" aria-hidden="true">✓</span><span>¡Adentro!</span>';
+  }
+  const message = el.querySelector<HTMLElement>(".challenge-message");
+  if (message) message.textContent = "la partida ya te está esperando";
+  playFeedback("start");
+  announce("Ingresaste a la partida");
+  window.setTimeout(() => el.classList.add("is-leaving"), 420);
+  window.setTimeout(() => el.remove(), 700);
+}
+
+function failInviteJoin(): void {
+  const el = document.getElementById("challenge-banner");
+  if (!el?.classList.contains("is-joining")) return;
+  const accept = el.querySelector<HTMLButtonElement>("#challenge-accept");
+  const dismiss = el.querySelector<HTMLButtonElement>("#challenge-dismiss");
+  el.classList.remove("is-joining");
+  el.classList.add("join-error");
+  if (accept) {
+    accept.disabled = false;
+    accept.setAttribute("aria-label", "Reintentar entrar a la partida");
+    accept.textContent = "Reintentar";
+  }
+  if (dismiss) dismiss.disabled = false;
+  const message = el.querySelector<HTMLElement>(".challenge-message");
+  if (message) message.textContent = "no pudimos entrar; probá de nuevo";
+  playFeedback("invalid");
+  announce("No pudimos entrar a la partida. Podés reintentar.");
+  window.setTimeout(() => el.classList.remove("join-error"), 420);
 }
 
 /** Firma y publica el marcador (rating ELO) tras una partida, si hay login Nostr. */
@@ -785,8 +850,26 @@ function wireNet(): void {
     else renderHome();
   });
   net.on("room", (m) => {
+    completeInviteJoin(m.room.id);
+    const previousRoomId = state.room?.id ?? null;
     const wasInRoom = state.room !== null;
+    const switchedRoom = previousRoomId !== null && previousRoomId !== m.room.id;
     let isRematch = false;
+    if (switchedRoom) {
+      // Una mesa nueva no puede heredar el resultado, posición ni acciones de
+      // la anterior. Sin esto la UI solo se corregía después de un F5.
+      state.match = null;
+      state.matchReceivedAt = 0;
+      state.ended = null;
+      state.myRating = null;
+      state.drawOfferBy = null;
+      state.rematchRequested = false;
+      state.rematchOffer = null;
+      state.bet = null;
+      state.myBetInvoice = null;
+      pendingMove = null;
+      viewedHistoryPly = null;
+    }
     state.room = m.room;
     writeSavedRoom(m.room.id);
     if (m.room.phase === "lobby") state.ready = false;
@@ -811,18 +894,24 @@ function wireNet(): void {
   });
   net.on("match", (m) => {
     const isNewMatch = state.match?.matchId !== m.snapshot.matchId && m.snapshot.sanHistory.length === 0;
+    if (clockAlertMatchId !== m.snapshot.matchId) {
+      clockAlertMatchId = m.snapshot.matchId;
+      ownClockAlertLevel = 0;
+    }
     const sound = soundForSnapshot(state.match, m.snapshot);
     if (sound) playSound(sound);
     if (pendingMove) {
       pendingMove = null;
     }
     state.match = m.snapshot;
+    if (isNewMatch) viewedHistoryPly = null;
     if (isNewMatch) trackUx("game_started");
     state.matchReceivedAt = Date.now();
     if (state.room) rememberRoomFriends(state.room, m.snapshot.matchId);
     state.drawOfferBy = null;
     renderBoardFromMatch();
     patchGame();
+    updateClockDisplays();
   });
   net.on("move_ack", (m) => {
     if (pendingMove?.requestId !== m.requestId) return;
@@ -878,6 +967,10 @@ function wireNet(): void {
   });
   net.on("ended", (m) => {
     state.ended = { winnerNpubs: m.winnerNpubs, ...endedText(m.winnerNpubs, m.result) };
+    // `ended` es la fuente inmediata de verdad para el cliente. Marcar también
+    // la sala evita que "Retar a otro" reutilice una mesa ya finalizada aunque
+    // el mensaje `room` con phase=finished llegue después o venga de un server viejo.
+    if (state.room) state.room = { ...state.room, phase: "finished" };
     state.myRating = m.ratings?.find((r) => r.npub === state.identity?.npub) ?? null;
     state.rematchRequested = false;
     state.rematchOffer = null;
@@ -910,6 +1003,7 @@ function wireNet(): void {
     // Sala inexistente: por reconexión, por F5 con sala guardada muerta, o por
     // código equivocado. En todos los casos: olvidarla y volver al inicio.
     if (m.code === "NO_ROOM") {
+      failInviteJoin();
       clearSavedRoom();
       state.room = null;
       state.match = null;
@@ -918,6 +1012,7 @@ function wireNet(): void {
       renderHome();
       return;
     }
+    failInviteJoin();
     toast(errorText(m.code, m.message));
     // Refrescar el lobby resetea botones que quedaron en estado "cargando"
     // (p. ej. "Creando…" si falló la propuesta de apuesta).
@@ -1331,7 +1426,7 @@ function renderHome(): void {
       </section>` : `<section class="guest-callout"><p>Estás jugando como invitado.</p><span>Con Nostr guardás ELO, rachas y rivales recientes.</span></section>`}
     </main>`;
 
-  document.getElementById("create")!.addEventListener("click", () => { playFeedback("ui"); net.createRoom(); });
+  document.getElementById("create")!.addEventListener("click", () => { playFeedback("ui"); createConfiguredRoom(); });
   document.getElementById("join")!.addEventListener("click", () => {
     const code = (document.getElementById("code") as HTMLInputElement).value.trim().toUpperCase();
     if (code) net.joinRoom({ code });
@@ -1369,11 +1464,14 @@ function friendInviteListHtml(): string {
     const label = rivalry
       ? `${rivalry.games} duelo${rivalry.games === 1 ? "" : "s"} · ${rivalry.wins}-${rivalry.losses}`
       : (affinity?.gamesTogether ?? 0) > 0 ? "Ya jugaron juntos" : affinity ? "Juega ajedrez" : "Contacto Nostr";
+    const isSending = pendingChallenge?.toPubkey === friend.pubkey;
     return `
     <div class="friend-row">
       ${avatarHtml(friend.name, friend.picture)}
       <span class="friend-copy"><span class="friend-name">${escapeHtml(friend.name)}</span>${label ? `<small>${label}</small>` : ""}</span>
-      <button type="button" data-invite-pubkey="${friend.pubkey}">Jugar</button>
+      <button type="button" class="invite-friend-button${isSending ? " is-sending" : ""}" data-invite-pubkey="${friend.pubkey}" data-invite-state="${isSending ? "sending" : "idle"}"${isSending ? " disabled" : ""} aria-live="polite" aria-label="${isSending ? `Enviando invitación a ${escapeHtml(friend.name)}` : `Invitar a ${escapeHtml(friend.name)} a jugar`}">
+        ${isSending ? '<span class="invite-button-spinner" aria-hidden="true"></span><span>Enviando…</span>' : "<span>Jugar</span>"}
+      </button>
     </div>`;
   }).join("")}</div>`;
 }
@@ -1396,14 +1494,15 @@ function wireFriendInviteButtons(): void {
 async function inviteFriend(toPubkey: string, button?: HTMLButtonElement): Promise<void> {
   if (!/^[0-9a-f]{64}$/.test(toPubkey) || login?.kind !== "nostr") return;
   if (toPubkey === state.identity?.pubkey) return toast("No podés invitarte a vos mismo");
-  if (!state.room || state.room.phase === "finished") {
-    if (state.room?.phase === "finished") trackUx("next_rival_challenged");
+  if (!state.room || state.ended !== null || state.room.phase === "finished") {
+    if (state.ended !== null || state.room?.phase === "finished") trackUx("next_rival_challenged");
     pendingChallenge = { toPubkey };
+    setInviteButtonState(button, "sending");
     toast("Preparando una nueva mesa…");
-    net.createRoom();
+    createConfiguredRoom();
     return;
   }
-  button?.setAttribute("disabled", "true");
+  setInviteButtonState(button, "sending");
   const friend = friends.find((candidate) => candidate.pubkey === toPubkey);
   try {
     await sendChallenge(login.signer, {
@@ -1413,12 +1512,56 @@ async function inviteFriend(toPubkey: string, button?: HTMLButtonElement): Promi
       message: `${state.identity?.displayName ?? "Alguien"} te invita a jugar ajedrez`,
     });
     trackUx("challenge_sent");
+    setInviteButtonState(button, "sent");
+    playFeedback("invite");
     toast(`Invitación enviada a ${friend?.name ?? "tu contacto"}`);
   } catch {
+    setInviteButtonState(button, "error");
+    playFeedback("invalid");
     toast("No se pudo enviar la invitación");
-  } finally {
-    button?.removeAttribute("disabled");
   }
+}
+
+type InviteButtonState = "idle" | "sending" | "sent" | "error";
+
+/** Feedback compacto y accesible en el mismo control que inició la invitación. */
+function setInviteButtonState(button: HTMLButtonElement | undefined, next: InviteButtonState): void {
+  if (!button) return;
+  const labels: Record<InviteButtonState, string> = {
+    idle: "Jugar",
+    sending: "Enviando…",
+    sent: "¡Invitado!",
+    error: "Reintentar",
+  };
+  button.dataset.inviteState = next;
+  button.classList.toggle("is-sending", next === "sending");
+  button.classList.toggle("is-sent", next === "sent");
+  button.classList.toggle("is-error", next === "error");
+  button.disabled = next === "sending" || next === "sent";
+  button.setAttribute("aria-label", labels[next]);
+  button.innerHTML = next === "sending"
+    ? `<span class="invite-button-spinner" aria-hidden="true"></span><span>${labels[next]}</span>`
+    : next === "sent"
+      ? `<span class="invite-button-check" aria-hidden="true">✓</span><span>${labels[next]}</span>`
+      : `<span>${labels[next]}</span>`;
+
+  const row = button.closest(".friend-row");
+  if (next === "sent" || next === "error") {
+    row?.classList.remove("invite-sent", "invite-error");
+    void row?.getBoundingClientRect();
+    row?.classList.add(next === "sent" ? "invite-sent" : "invite-error");
+    window.setTimeout(() => {
+      if (!button.isConnected || button.dataset.inviteState !== next) return;
+      row?.classList.remove("invite-sent", "invite-error");
+      setInviteButtonState(button, "idle");
+    }, next === "sent" ? 1600 : 1200);
+  }
+}
+
+function showInviteButtonResult(toPubkey: string, result: "sent" | "error"): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-invite-pubkey]").forEach((button) => {
+    if (button.dataset.invitePubkey === toPubkey) setInviteButtonState(button, result);
+  });
 }
 
 /** Crea la sala y deja el reto pendiente; se envía al llegar el `room`. */
@@ -1435,12 +1578,16 @@ function sendChallengeFromHome(): void {
   if (toPubkey === state.identity?.pubkey) return toast("No podés retarte a vos mismo");
   pendingChallenge = { toPubkey };
   toast("Creando sala…");
-  net.createRoom();
+  createConfiguredRoom();
 }
 
 // --------------------------------------------------------------- render: partida
 
 function enterGame(): void {
+  board?.destroy();
+  board = null;
+  coordinateObserver?.disconnect();
+  coordinateObserver = null;
   document.body.classList.add("game-active");
   state.ended = null;
   state.myRating = null;
@@ -1450,6 +1597,7 @@ function enterGame(): void {
   state.myBetInvoice = null;
   state.newlyEarned = [];
   pendingMove = null;
+  viewedHistoryPly = null;
   app.innerHTML =
     topbar() +
     `<main class="game">
@@ -1461,7 +1609,7 @@ function enterGame(): void {
       <aside class="side" id="side"></aside>
     </main>`;
   const onMove: MoveFn = (from, to, promo) => {
-    // Peón coronando sin pieza elegida (ni el canvas ni Vexel la eligen): abrir
+    // Peón coronando sin pieza elegida: abrir
     // el selector antes de mandar la jugada. El server valida igual.
     if (!promo && isPromotionMove(from, to)) {
       openPromotionDialog(myColor() ?? "w", to, (piece) => submitMove(from, to, piece), () => board?.rejectMove());
@@ -1470,24 +1618,28 @@ function enterGame(): void {
     submitMove(from, to, promo === "" ? undefined : (promo as "q" | "r" | "b" | "n"));
   };
   const boardHost = document.getElementById("board-wrap")!;
-  const kind = boardKind();
-  boardHost.dataset.boardKind = kind;
+  boardHost.dataset.boardKind = "vexel";
   const feedback = (event: "pickup" | "drop" | "invalid") => playFeedback(event === "drop" ? "move" : event);
-  const useCanvasFallback = (reason: string) => {
-    if (vexelUnavailable || boardHost.dataset.boardKind === "canvas") return;
-    vexelUnavailable = true;
-    console.warn(`[chess-board] Vexel no disponible; activando Canvas: ${reason}`);
+  let failureHandled = false;
+  const showVexelFailure = (reason: string) => {
+    if (failureHandled) return;
+    failureHandled = true;
+    console.error(`[chess-board] Vexel no pudo iniciar: ${reason}`);
     coordinateObserver?.disconnect();
     coordinateObserver = null;
     board?.destroy();
+    board = null;
     boardHost.replaceChildren();
-    boardHost.dataset.boardKind = "canvas";
-    board = createBoard(boardHost, onMove, "canvas", feedback);
-    renderBoardFromMatch();
-    toast("Vexel no pudo iniciar. Activamos el tablero compatible.");
-    announce("Tablero compatible activado. Podés continuar jugando.");
+    boardHost.dataset.boardKind = "error";
+    boardHost.innerHTML = `<div class="board-error" role="alert">
+      <strong>Vexel no pudo iniciar</strong>
+      <span>El tablero necesita recargarse para continuar.</span>
+      <button class="btn-gold" id="retry-vexel" type="button">Reintentar Vexel</button>
+    </div>`;
+    boardHost.querySelector<HTMLButtonElement>("#retry-vexel")?.addEventListener("click", () => location.reload());
+    announce("Vexel no pudo iniciar. Recargá el tablero para continuar.");
   };
-  board = createBoard(boardHost, onMove, kind, feedback, useCanvasFallback);
+  board = createBoard(boardHost, onMove, feedback, showVexelFailure);
   renderBoardFromMatch();
   patchGame();
 }
@@ -1590,12 +1742,57 @@ function openPromotionDialog(
   );
 }
 
+function historyPositions(): HistoryPosition[] {
+  return buildHistoryPositions(state.match?.sanHistory ?? []);
+}
+
+function activeHistoryPly(): number {
+  const latest = state.match?.sanHistory.length ?? 0;
+  return viewedHistoryPly === null ? latest : Math.max(0, Math.min(viewedHistoryPly, latest));
+}
+
+function historyPositionLabel(ply: number): string {
+  if (ply === 0) return "Posición inicial";
+  const san = state.match?.sanHistory[ply - 1] ?? "";
+  const move = Math.ceil(ply / 2);
+  return `${move}${ply % 2 === 0 ? "…" : "."} ${san}`;
+}
+
+function viewHistoryAt(ply: number): void {
+  if (!state.match || pendingMove) return;
+  const latest = state.match.sanHistory.length;
+  const next = Math.max(0, Math.min(Math.round(ply), latest));
+  viewedHistoryPly = next === latest ? null : next;
+  renderBoardFromMatch();
+  patchSidePanels();
+  announce(viewedHistoryPly === null ? "Volviste a la posición en vivo" : `Revisando ${historyPositionLabel(next)}`);
+}
+
 function renderBoardFromMatch(): void {
   if (!board) return;
   const color = myColor() ?? "w";
   board.setOrientation(color);
   renderBoardCoordinates(color);
+  document.getElementById("history-review-badge")?.remove();
   if (state.match) {
+    const latestPly = state.match.sanHistory.length;
+    const selectedPly = activeHistoryPly();
+    if (selectedPly < latestPly) {
+      const position = historyPositions()[selectedPly];
+      if (position) {
+        board.applyFen(position.fen);
+        board.highlight(position.move ? [position.move.from, position.move.to] : []);
+        board.setLegalTargets({});
+        board.setInteractive(false);
+        const badge = document.createElement("div");
+        badge.id = "history-review-badge";
+        badge.className = "history-review-badge";
+        badge.textContent = historyPositionLabel(selectedPly);
+        document.getElementById("board-wrap")?.appendChild(badge);
+        return;
+      }
+    }
+    viewedHistoryPly = null;
     board.applyFen(state.match.fen, state.match.lastMove);
     const last = state.match.lastMove;
     board.highlight(last ? [last.from, last.to] : []);
@@ -1685,8 +1882,12 @@ function playerBarInner(p: RoomPlayer | undefined, isMe: boolean): string {
   const name = visibleName(p);
   const profile = profileFor(p.pubkey);
   const m = state.match;
-  const ms = p.color === "w" ? m?.whiteClockMs : m?.blackClockMs;
+  const matchClock = p.color === "w" ? m?.whiteClockMs : m?.blackClockMs;
+  const ms = matchClock ?? (p.color ? state.room?.clockMs : undefined);
   const isTurn = m?.turn === p.color && m?.result.kind === "ongoing";
+  const remaining = ms === undefined || !p.color ? undefined : liveClockMs(ms, p.color);
+  const urgency = remaining === undefined ? 0 : clockUrgency(remaining, state.room?.clockMs || 5 * 60 * 1000);
+  const warning = urgency === 2 ? "¡ÚLTIMOS 10 SEGUNDOS!" : urgency === 1 ? "POCO TIEMPO" : "Tiempo normal";
   const tag = isMe && isTurn ? `<span class="turn-tag">TU TURNO</span>` : "";
   const captured = p.color ? capturedHtml(p.color) : "";
   return `
@@ -1695,7 +1896,10 @@ function playerBarInner(p: RoomPlayer | undefined, isMe: boolean): string {
       <span class="player-name">${escapeHtml(name)}${tag}</span>
       <span class="captured">${captured}</span>
     </div>
-    <span class="clock${isTurn ? " is-active" : ""}"${p.color ? ` data-clock="${p.color}"` : ""}>${ms === undefined || !p.color ? "--:--" : fmtClock(ms, p.color)}</span>`;
+    <span class="clock-shell">
+      <span class="time-warning urgency-${urgency}"${p.color ? ` data-time-warning="${p.color}"` : ""} aria-hidden="true">${warning}</span>
+      <span class="clock${isTurn ? " is-active" : ""}${urgency === 1 ? " is-low" : urgency === 2 ? " is-critical" : ""}" role="timer"${p.color ? ` data-clock="${p.color}"` : ""} aria-label="${remaining === undefined ? "Reloj sin iniciar" : clockAriaLabel(remaining, urgency)}">${remaining === undefined ? "--:--" : formatClockMs(remaining)}</span>
+    </span>`;
 }
 
 // -- panel lateral por fase --
@@ -1705,9 +1909,12 @@ function patchSidePanels(): void {
   if (!side || !state.room) return;
   side.innerHTML = phasePanelHtml();
   wireSidePanels();
-  // Historial: mantener la última jugada a la vista.
+  // Mantener a la vista la posición seleccionada; en vivo, seguir la última.
   const grid = document.getElementById("history-grid");
-  if (grid) grid.scrollTop = grid.scrollHeight;
+  const selected = grid?.querySelector<HTMLElement>(".ply.viewing");
+  if (grid && selected)
+    grid.scrollTop = Math.max(0, selected.offsetTop - grid.clientHeight / 2 + selected.offsetHeight / 2);
+  else if (grid) grid.scrollTop = grid.scrollHeight;
 }
 
 function phasePanelHtml(): string {
@@ -1721,30 +1928,60 @@ function historyCard(): string {
   const sans = state.match?.sanHistory ?? [];
   const rows: string[] = [];
   const last = sans.length - 1;
+  const selectedPly = activeHistoryPly();
+  const reviewing = viewedHistoryPly !== null && selectedPly < sans.length;
   for (let i = 0; i < sans.length; i += 2) {
     const w = sans[i];
     const b = sans[i + 1];
     if (!w) continue;
-    const wLast = i === last ? " last" : "";
-    const bLast = i + 1 === last ? " last" : "";
+    const wClass = `${i === last ? " last" : ""}${selectedPly === i + 1 ? " viewing" : ""}`;
+    const bClass = `${i + 1 === last ? " last" : ""}${selectedPly === i + 2 ? " viewing" : ""}`;
     rows.push(
       `<span class="num">${i / 2 + 1}.</span>` +
-        `<span class="ply${wLast}">${w}</span>` +
-        `<span class="ply${bLast}">${b ?? ""}</span>`,
+        `<button type="button" class="ply${wClass}" data-history-ply="${i + 1}" aria-label="Ver posición después de ${escapeHtml(w)}">${escapeHtml(w)}</button>` +
+        (b
+          ? `<button type="button" class="ply${bClass}" data-history-ply="${i + 2}" aria-label="Ver posición después de ${escapeHtml(b)}">${escapeHtml(b)}</button>`
+          : `<span class="ply empty" aria-hidden="true"></span>`),
     );
   }
   const body = rows.length
     ? `<div class="history-grid" id="history-grid">${rows.join("")}</div>`
     : `<p class="history-empty">Sin jugadas todavía.</p>`;
   return `<div class="card history">
-    <p class="section-label">Jugadas</p>
+    <div class="history-heading"><p class="section-label">Jugadas</p><span>${reviewing ? "Revisión" : "En vivo"}</span></div>
     ${body}
+    <div class="history-controls" aria-label="Navegar posiciones anteriores">
+      <button type="button" id="history-first" aria-label="Posición inicial" title="Posición inicial" ${selectedPly === 0 ? "disabled" : ""}>⏮</button>
+      <button type="button" id="history-back" aria-label="Jugada anterior" title="Jugada anterior" ${selectedPly === 0 ? "disabled" : ""}>◀</button>
+      <span class="history-position">${reviewing ? escapeHtml(historyPositionLabel(selectedPly)) : "● En vivo"}</span>
+      <button type="button" id="history-forward" aria-label="Jugada siguiente" title="Jugada siguiente" ${selectedPly >= sans.length ? "disabled" : ""}>▶</button>
+      <button type="button" id="history-live" class="history-live" aria-label="Volver a la posición en vivo" title="Volver en vivo" ${!reviewing ? "disabled" : ""}>En vivo</button>
+    </div>
   </div>`;
 }
 
 function lobbyPanel(): string {
   const room = state.room!;
   const full = room.players.length >= 2;
+  const clockMinutes = Math.round((room.clockMs || 5 * 60 * 1000) / 60_000);
+  const timeControl = amHost()
+    ? `<div class="card time-control-card is-editable" aria-label="Configurar ritmo de la partida">
+        <div class="time-control-heading">
+          <div><p class="section-label">Ritmo de la partida</p><strong>${clockMinutes}<small> min</small></strong></div>
+          <span>Elegís vos<br><small>sin incremento</small></span>
+        </div>
+        <div class="time-options lobby-time-options">
+          ${CLOCK_OPTIONS.map((minutes) => `<label>
+            <input type="radio" name="lobby-clock-minutes" value="${minutes}" ${minutes === clockMinutes ? "checked" : ""} />
+            <span>${minutes}<small>min</small></span>
+          </label>`).join("")}
+        </div>
+        <p class="fine">Podés cambiarlo hasta que empiece la partida.</p>
+      </div>`
+    : `<div class="card time-control-card" aria-label="Ritmo de la partida: ${clockMinutes} minutos por jugador, sin incremento">
+        <div><p class="section-label">Ritmo de la partida</p><strong>${clockMinutes}<small> min</small></strong></div>
+        <span>por jugador<br><small>sin incremento</small></span>
+      </div>`;
   const inviteUrl = `${location.origin}/?join=${encodeURIComponent(room.id)}`;
   const seats = room.players
     .map((p) => {
@@ -1779,11 +2016,16 @@ function lobbyPanel(): string {
       </div>
       <p class="fine">Compartí el link o el código (tu rival tiene que usar OTRO nombre).</p>
     </div>
+    ${timeControl}
     ${login?.kind === "nostr" && !full ? `<div class="card friend-invite-card"><p class="section-label">Invitar desde Nostr</p>${friendInviteListHtml()}</div>` : ""}
     <div class="card">${seats}${emptySeat}</div>
     ${betPanel()}
-    <button class="btn-gold" id="ready" ${!full || state.ready ? "disabled" : ""}>
-      ${state.ready ? "Esperando al rival…" : full ? "Listo" : "Falta el rival"}
+    <button class="btn-gold ready-button${state.ready ? " is-ready" : ""}" id="ready" ${!full || state.ready ? "disabled" : ""} aria-live="polite" aria-label="${state.ready ? "Estás listo. Esperando al rival" : full ? `Ponerme listo para jugar ${clockMinutes} minutos` : "Falta el rival para empezar"}">
+      <span class="ready-button-icon" aria-hidden="true">${state.ready ? "✓" : "♟"}</span>
+      <span class="ready-button-copy">
+        <strong>${state.ready ? "¡Listo!" : full ? "Ponerme listo" : "Falta el rival"}</strong>
+        <small>${state.ready ? "Esperando al rival…" : full ? `Partida de ${clockMinutes} min` : "Podrás empezar cuando se una"}</small>
+      </span>
     </button>
     <button class="danger leave-room" id="leave-room">Salir de la sala</button>`;
 }
@@ -1867,7 +2109,9 @@ function playingPanel(): string {
   const offer = state.drawOfferBy;
   const m = state.match;
   const status =
-    m?.inCheck && m.result.kind === "ongoing"
+    viewedHistoryPly !== null
+      ? `<p class="status review">Revisando ${escapeHtml(historyPositionLabel(activeHistoryPly()))}</p>`
+      : m?.inCheck && m.result.kind === "ongoing"
       ? `<p class="status check">¡Jaque!</p>`
       : `<p class="status muted">${m?.turn === myColor() ? "Tu turno" : "Turno del rival"}</p>`;
   const drawBtn =
@@ -1990,11 +2234,34 @@ function achievementText(): string {
 function wireSidePanels(): void {
   const on = (id: string, fn: () => void) => document.getElementById(id)?.addEventListener("click", fn);
   wireFriendInviteButtons();
+  document.querySelectorAll<HTMLButtonElement>("[data-history-ply]").forEach((button) => {
+    button.addEventListener("click", () => viewHistoryAt(Number(button.dataset.historyPly)));
+  });
+  on("history-first", () => viewHistoryAt(0));
+  on("history-back", () => viewHistoryAt(activeHistoryPly() - 1));
+  on("history-forward", () => viewHistoryAt(activeHistoryPly() + 1));
+  on("history-live", () => viewHistoryAt(state.match?.sanHistory.length ?? 0));
   on("copy", () => {
     const el = document.getElementById("invite-url") as HTMLInputElement | null;
     if (el) navigator.clipboard.writeText(el.value).then(() => toast("Link copiado"));
   });
-  on("ready", () => { state.ready = true; net.ready(); patchSidePanels(); });
+  document.querySelectorAll<HTMLInputElement>('input[name="lobby-clock-minutes"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      const minutes = Number(input.value);
+      if (!CLOCK_OPTIONS.includes(minutes as (typeof CLOCK_OPTIONS)[number])) return;
+      state.ready = false;
+      document.querySelectorAll<HTMLInputElement>('input[name="lobby-clock-minutes"]').forEach((option) => { option.disabled = true; });
+      playFeedback("ui");
+      net.setTimeControl(minutes);
+    });
+  });
+  on("ready", () => {
+    state.ready = true;
+    playFeedback("ui");
+    net.ready();
+    patchSidePanels();
+    announce("Estás listo. Esperando al rival.");
+  });
   on("leave-room", () => {
     const btn = document.getElementById("leave-room") as HTMLButtonElement | null;
     if (btn) armButton(btn, "¿Confirmar salida?", () => net.leaveRoom());
@@ -2095,26 +2362,47 @@ function requestZap(signer: NgpSigner, pubkey: string, name: string, sats: numbe
 // --------------------------------------------------------------- reloj + toast
 
 /** Formatea el reloj de un color, descontando localmente si es su turno. */
-function fmtClock(baseMs: number, color: Color): string {
+function liveClockMs(baseMs: number, color: Color): number {
   const m = state.match;
   let live = baseMs;
   if (m && m.result.kind === "ongoing" && m.turn === color) {
     live = baseMs - (Date.now() - state.matchReceivedAt);
   }
-  const s = Math.max(0, Math.ceil(live / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  return Math.max(0, live);
 }
 
 // Tic del reloj: actualiza SOLO el texto de los relojes (nada de reconstruir las
 // barras enteras cada segundo — flickeaba y reparseaba las piezas capturadas).
-setInterval(() => {
+function updateClockDisplays(): void {
   const m = state.match;
   if (state.room?.phase !== "playing" || m?.result.kind !== "ongoing") return;
   for (const el of document.querySelectorAll<HTMLElement>("[data-clock]")) {
     const color = el.dataset.clock as Color;
-    el.textContent = fmtClock(color === "w" ? m.whiteClockMs : m.blackClockMs, color);
+    const remaining = liveClockMs(color === "w" ? m.whiteClockMs : m.blackClockMs, color);
+    const urgency = clockUrgency(remaining, state.room.clockMs || 5 * 60 * 1000);
+    el.textContent = formatClockMs(remaining);
+    el.classList.toggle("is-low", urgency === 1);
+    el.classList.toggle("is-critical", urgency === 2);
+    el.setAttribute("aria-label", clockAriaLabel(remaining, urgency));
+    const warning = document.querySelector<HTMLElement>(`[data-time-warning="${color}"]`);
+    if (warning) {
+      warning.className = `time-warning urgency-${urgency}`;
+      warning.textContent = urgency === 2 ? "¡ÚLTIMOS 10 SEGUNDOS!" : urgency === 1 ? "POCO TIEMPO" : "Tiempo normal";
+    }
+
+    if (color !== myColor() || color !== m.turn || urgency <= ownClockAlertLevel) continue;
+    ownClockAlertLevel = urgency;
+    if (urgency === 2) {
+      playFeedback("time-critical");
+      announce("Atención: te quedan diez segundos");
+    } else {
+      playFeedback("time-low");
+      announce(`Atención: te queda poco tiempo, ${formatClockMs(remaining)}`);
+    }
   }
-}, 1000);
+}
+
+setInterval(updateClockDisplays, 250);
 
 /** Errores del server traducidos para humanos (el código crudo va de fallback). */
 const ERROR_TEXT: Record<string, string> = {

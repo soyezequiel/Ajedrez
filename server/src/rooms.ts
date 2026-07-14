@@ -35,6 +35,17 @@ interface PersistedRoom {
   drawOfferBy: Npub | null;
   rematchBy: Npub[];
   matchSerial?: number;
+  clockMs?: number;
+}
+
+/** Ritmos admitidos al crear una mesa. Sin incremento por ahora. */
+export const ALLOWED_CLOCK_MINUTES = [1, 3, 5, 10, 15, 30] as const;
+
+export function clockMsFromMinutes(minutes?: number): number {
+  if (minutes === undefined) return config.defaultClockMs;
+  if (!ALLOWED_CLOCK_MINUTES.includes(minutes as (typeof ALLOWED_CLOCK_MINUTES)[number]))
+    throw new RoomError("BAD_TIME_CONTROL", "Ritmo de juego no permitido");
+  return minutes * 60 * 1000;
 }
 
 /** Una sala = un emparejamiento 1v1 de ajedrez. */
@@ -42,6 +53,7 @@ export class Room {
   readonly id: string;
   readonly code: string;
   readonly hostNpub: Npub;
+  clockMs: number;
 
   phase: RoomPhase = "lobby";
   match: ChessMatch | null = null;
@@ -64,12 +76,13 @@ export class Room {
   /** Secuencia durable para que cada revancha tenga un matchId realmente único. */
   private matchSerial = 0;
 
-  constructor(host: PlayerInit, id?: string, persisted?: PersistedRoom) {
+  constructor(host: PlayerInit, id?: string, persisted?: PersistedRoom, clockMs = config.defaultClockMs) {
     // `id` externo = sala de un link `?join=<id>` (invite propio o Room Link de la
     // tienda), creada lazy. Sin id, generamos uno propio ("Crear sala" normal).
     this.id = persisted?.id ?? id ?? makeCode();
     this.code = persisted?.code ?? this.id;
     this.hostNpub = persisted?.hostNpub ?? host.npub;
+    this.clockMs = persisted?.clockMs ?? clockMs;
     if (persisted) {
       this.matchSerial = persisted.matchSerial ?? (persisted.match ? 1 : 0);
       this.phase = persisted.phase;
@@ -85,7 +98,7 @@ export class Room {
           matchId: `match_${this.id}_${Math.max(1, this.matchSerial)}`,
           white: white.npub,
           black: black.npub,
-          clockMs: config.defaultClockMs,
+          clockMs: this.clockMs,
           restored: persisted.match,
         });
       }
@@ -112,6 +125,7 @@ export class Room {
       drawOfferBy: this.drawOfferBy,
       rematchBy: [...this.rematchBy],
       matchSerial: this.matchSerial,
+      clockMs: this.clockMs,
     };
   }
 
@@ -140,6 +154,14 @@ export class Room {
     };
     this.players.set(player.npub, seat);
     return seat;
+  }
+
+  /** Cambia el ritmo mientras la mesa todavía está en el lobby. */
+  setClockMs(clockMs: number): void {
+    if (this.phase !== "lobby")
+      throw new RoomError("NOT_LOBBY", "La partida ya arrancó");
+    this.clockMs = clockMs;
+    this.touch();
   }
 
   /** Libera un asiento del lobby. El anfitrión cierra la sala desde RoomManager. */
@@ -188,7 +210,7 @@ export class Room {
       matchId: `match_${this.id}_${this.matchSerial}`,
       white: white.npub,
       black: black.npub,
-      clockMs: config.defaultClockMs,
+      clockMs: this.clockMs,
       now,
     });
     this.phase = "playing";
@@ -205,10 +227,10 @@ export class RoomManager {
     if (storagePath) this.load();
   }
 
-  create(host: PlayerInit): Room {
+  create(host: PlayerInit, clockMs = config.defaultClockMs): Room {
     let code = makeCode();
     while (this.byId.has(code)) code = makeCode();
-    const room = new Room(host, code);
+    const room = new Room(host, code, undefined, clockMs);
     this.byId.set(room.id, room);
     this.byCode.set(room.code, room.id);
     this.persist();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RoomError, RoomManager } from "./rooms.js";
+import { RoomError, RoomManager, clockMsFromMinutes } from "./rooms.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16,6 +16,30 @@ describe("RoomManager — GC de salas (sweep)", () => {
     expect(room.code).toBe(room.id);
   });
 
+  it("guarda el tiempo elegido por el creador y lo usa en la partida", () => {
+    const room = new RoomManager().create(HOST, 10 * 60 * 1000);
+    room.join(GUEST);
+    const match = room.startMatch(1_000).snapshot();
+    expect(room.clockMs).toBe(10 * 60 * 1000);
+    expect(match.whiteClockMs).toBe(10 * 60 * 1000);
+    expect(match.blackClockMs).toBe(10 * 60 * 1000);
+  });
+
+  it("rechaza tiempos manipulados fuera de los ritmos ofrecidos", () => {
+    expect(() => clockMsFromMinutes(0)).toThrow(RoomError);
+    expect(() => clockMsFromMinutes(999)).toThrow(RoomError);
+    expect(clockMsFromMinutes(3)).toBe(3 * 60 * 1000);
+  });
+
+  it("permite cambiar el tiempo en el lobby pero no durante la partida", () => {
+    const room = new RoomManager().create(HOST);
+    room.setClockMs(15 * 60 * 1000);
+    expect(room.clockMs).toBe(15 * 60 * 1000);
+    room.join(GUEST);
+    room.startMatch(0);
+    expect(() => room.setClockMs(3 * 60 * 1000)).toThrow(RoomError);
+  });
+
   it("restaura sala y partida completa desde disco", () => {
     const dir = mkdtempSync(join(tmpdir(), "ajedrez-rooms-"));
     const path = join(dir, "rooms.json");
@@ -30,6 +54,7 @@ describe("RoomManager — GC de salas (sweep)", () => {
       expect(restored.roster).toHaveLength(2);
       expect(restored.match?.snapshot().sanHistory).toEqual(["e4"]);
       expect(restored.match?.snapshot().fen).toBe(room.match?.snapshot().fen);
+      expect(restored.clockMs).toBe(room.clockMs);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

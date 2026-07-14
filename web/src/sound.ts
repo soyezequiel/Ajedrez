@@ -14,6 +14,8 @@ export type SoundName =
   | "ui"
   | "invite"
   | "start"
+  | "time-low"
+  | "time-critical"
   | "win"
   | "lose"
   | "end";
@@ -140,6 +142,16 @@ const SOUNDS: Record<SoundName, Note[]> = {
     { f: 494, at: 0.09, d: 0.14, v: 0.12 },
     { f: 587, at: 0.18, d: 0.22, v: 0.12 },
   ],
+  // Avisos del reloj: distinguibles del jaque y de una jugada.
+  "time-low": [
+    { f: 440, at: 0, d: 0.11, type: "triangle", v: 0.12 },
+    { f: 440, at: 0.18, d: 0.14, type: "triangle", v: 0.12 },
+  ],
+  "time-critical": [
+    { f: 660, at: 0, d: 0.08, type: "square", v: 0.1 },
+    { f: 660, at: 0.13, d: 0.08, type: "square", v: 0.1 },
+    { f: 880, at: 0.26, d: 0.17, type: "triangle", v: 0.12 },
+  ],
   // Fin: resolución descendente.
   end: [
     { f: 587, at: 0, d: 0.16, v: 0.14 },
@@ -170,6 +182,8 @@ const VIBRATIONS: Partial<Record<SoundName, number | number[]>> = {
   check: [18, 35, 18],
   invalid: [18, 35, 18],
   invite: [10, 35, 12],
+  "time-low": [20, 45, 20],
+  "time-critical": [30, 35, 30, 35, 45],
   win: [15, 35, 20, 45, 28],
 };
 

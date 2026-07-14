@@ -6,8 +6,8 @@ dependencias de fuentes del sistema.
 | Archivo | Tamaño | Uso |
 |---|---:|---|
 | `board.png` | 1024² | Tablero 8×8 con veta de madera. |
-| `pieces/{w,b}{P,N,B,R,Q,K}.png` | 256² | Piezas con fondo transparente. |
-| `highlight.png`, `select.png` | 256² | Feedback de destino y selección. |
+| `pieces/{w,b}{P,N,B,R,Q,K}.png` | 512² | Piezas retina con fondo transparente. |
+| `highlight.png`, `select.png` | 64² | Feedback de destino y selección. |
 | SVG equivalentes | — | Fuentes vectoriales editables. |
 
 ## Regenerar y publicar

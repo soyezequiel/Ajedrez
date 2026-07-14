@@ -19,6 +19,7 @@ await render(join(TEX, "select.svg"), join(TEX, "select.png"), 64);
 
 const dir = join(TEX, "pieces");
 for (const f of readdirSync(dir).filter((f) => f.endsWith(".svg"))) {
-  await render(join(dir, f), join(dir, f.replace(".svg", ".png")), 256);
+  // 512 px conserva bordes limpios en pantallas retina y durante el zoom/drag.
+  await render(join(dir, f), join(dir, f.replace(".svg", ".png")), 512);
 }
 console.log("listo");

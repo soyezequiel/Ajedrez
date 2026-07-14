@@ -230,150 +230,150 @@ Module["expectedDataFileDownloads"]++;
       {
         "filename": "/textures/README.md",
         "start": 797,
-        "end": 1601
+        "end": 1607
       },
       {
         "filename": "/textures/board.png",
-        "start": 1601,
-        "end": 86079
+        "start": 1607,
+        "end": 86085
       },
       {
         "filename": "/textures/board.svg",
-        "start": 86079,
-        "end": 90333
+        "start": 86085,
+        "end": 90339
       },
       {
         "filename": "/textures/highlight.png",
-        "start": 90333,
-        "end": 90730
+        "start": 90339,
+        "end": 90736
       },
       {
         "filename": "/textures/pieces/bB.png",
-        "start": 90730,
-        "end": 97892
+        "start": 90736,
+        "end": 122805
       },
       {
         "filename": "/textures/pieces/bB.svg",
-        "start": 97892,
-        "end": 98421
+        "start": 122805,
+        "end": 123596
       },
       {
         "filename": "/textures/pieces/bK.png",
-        "start": 98421,
-        "end": 104177
+        "start": 123596,
+        "end": 152256
       },
       {
         "filename": "/textures/pieces/bK.svg",
-        "start": 104177,
-        "end": 104684
+        "start": 152256,
+        "end": 153027
       },
       {
         "filename": "/textures/pieces/bN.png",
-        "start": 104684,
-        "end": 111401
+        "start": 153027,
+        "end": 186020
       },
       {
         "filename": "/textures/pieces/bN.svg",
-        "start": 111401,
-        "end": 111940
+        "start": 186020,
+        "end": 186851
       },
       {
         "filename": "/textures/pieces/bP.png",
-        "start": 111940,
-        "end": 118076
+        "start": 186851,
+        "end": 217315
       },
       {
         "filename": "/textures/pieces/bP.svg",
-        "start": 118076,
-        "end": 118578
+        "start": 217315,
+        "end": 218092
       },
       {
         "filename": "/textures/pieces/bQ.png",
-        "start": 118578,
-        "end": 126150
+        "start": 218092,
+        "end": 260692
       },
       {
         "filename": "/textures/pieces/bQ.svg",
-        "start": 126150,
-        "end": 126720
+        "start": 260692,
+        "end": 261516
       },
       {
         "filename": "/textures/pieces/bR.png",
-        "start": 126720,
-        "end": 132751
+        "start": 261516,
+        "end": 292315
       },
       {
         "filename": "/textures/pieces/bR.svg",
-        "start": 132751,
-        "end": 133268
+        "start": 292315,
+        "end": 293147
       },
       {
         "filename": "/textures/pieces/wB.png",
-        "start": 133268,
-        "end": 140633
+        "start": 293147,
+        "end": 335306
       },
       {
         "filename": "/textures/pieces/wB.svg",
-        "start": 140633,
-        "end": 141162
+        "start": 335306,
+        "end": 336097
       },
       {
         "filename": "/textures/pieces/wK.png",
-        "start": 141162,
-        "end": 146969
+        "start": 336097,
+        "end": 373822
       },
       {
         "filename": "/textures/pieces/wK.svg",
-        "start": 146969,
-        "end": 147476
+        "start": 373822,
+        "end": 374593
       },
       {
         "filename": "/textures/pieces/wN.png",
-        "start": 147476,
-        "end": 154613
+        "start": 374593,
+        "end": 419989
       },
       {
         "filename": "/textures/pieces/wN.svg",
-        "start": 154613,
-        "end": 155152
+        "start": 419989,
+        "end": 420820
       },
       {
         "filename": "/textures/pieces/wP.png",
-        "start": 155152,
-        "end": 161448
+        "start": 420820,
+        "end": 460505
       },
       {
         "filename": "/textures/pieces/wP.svg",
-        "start": 161448,
-        "end": 161950
+        "start": 460505,
+        "end": 461282
       },
       {
         "filename": "/textures/pieces/wQ.png",
-        "start": 161950,
-        "end": 169505
+        "start": 461282,
+        "end": 517783
       },
       {
         "filename": "/textures/pieces/wQ.svg",
-        "start": 169505,
-        "end": 170075
+        "start": 517783,
+        "end": 518607
       },
       {
         "filename": "/textures/pieces/wR.png",
-        "start": 170075,
-        "end": 175879
+        "start": 518607,
+        "end": 559270
       },
       {
         "filename": "/textures/pieces/wR.svg",
-        "start": 175879,
-        "end": 176396
+        "start": 559270,
+        "end": 560102
       },
       {
         "filename": "/textures/select.png",
-        "start": 176396,
-        "end": 176814
+        "start": 560102,
+        "end": 560520
       }
     ],
-    "remote_package_size": 176814
+    "remote_package_size": 560520
   });
 })();
 

@@ -16,24 +16,15 @@ export interface BoardController {
   destroy(): void;
 }
 
-const PIECE_CODES = ["wP", "wN", "wB", "wR", "wQ", "wK", "bP", "bN", "bB", "bR", "bQ", "bK"];
 const GAME_BASE = (import.meta.env.VITE_GAME_BASE as string | undefined) ?? "/game";
 // ajedrez.js, ajedrez.wasm y ajedrez.data forman una unidad: mezclar versiones
 // corrompe los offsets del filesystem precargado. Cambiar este valor al
 // regenerar el paquete fuerza una descarga coherente de los tres archivos.
-const GAME_ASSET_VERSION = (import.meta.env.VITE_GAME_ASSET_VERSION as string | undefined) ?? "club-cinematic-20260713-2";
+const GAME_ASSET_VERSION = (import.meta.env.VITE_GAME_ASSET_VERSION as string | undefined) ?? "club-cinematic-20260713-3";
 const GAME_SIZE = 600;
 const GAME_MARGIN = 20;
 const GAME_CELL = 70;
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`No cargó ${src}`));
-    image.src = src;
-  });
-}
 
 export function parseFen(fen: string): (string | null)[] {
   const placement: (string | null)[] = new Array(64).fill(null);
@@ -156,227 +147,6 @@ abstract class InteractiveBoard implements BoardController {
   }
 }
 
-export class CanvasBoard extends InteractiveBoard {
-  private readonly ctx: CanvasRenderingContext2D;
-  private board: HTMLImageElement | null = null;
-  private readonly pieces = new Map<string, HTMLImageElement>();
-  private drag: { pointerId: number; from: number; x: number; y: number; moved: boolean } | null = null;
-  private keyboardIndex = squareToIndex("e2");
-  private animation: { from: number; to: number; code: string; startedAt: number } | null = null;
-
-  constructor(private readonly canvas: HTMLCanvasElement, onMove: MoveFn, onFeedback: FeedbackFn, base = "/textures") {
-    super(onMove, onFeedback);
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas 2D no disponible");
-    this.ctx = context;
-    canvas.tabIndex = 0;
-    canvas.setAttribute("role", "grid");
-    canvas.setAttribute("aria-label", "Tablero de ajedrez. Usá las flechas y Enter para mover.");
-    canvas.addEventListener("pointerdown", this.pointerDown);
-    canvas.addEventListener("pointermove", this.pointerMove);
-    canvas.addEventListener("pointerup", this.pointerUp);
-    canvas.addEventListener("pointercancel", this.pointerCancel);
-    canvas.addEventListener("keydown", this.keyDown);
-    canvas.addEventListener("focus", () => this.redraw());
-    canvas.addEventListener("blur", () => this.redraw());
-    void this.load(base);
-  }
-
-  private async load(base: string): Promise<void> {
-    this.board = await loadImage(`${base}/board.png`);
-    await Promise.all(PIECE_CODES.map(async (code) => this.pieces.set(code, await loadImage(`${base}/pieces/${code}.png`))));
-    this.redraw();
-  }
-
-  applyFen(fen: string, move?: MovePayload | null): void {
-    const previous = this.placement;
-    const wasPending = this.pending !== null;
-    this.placement = parseFen(fen);
-    this.pending = null;
-    this.selected = null;
-    const from = move ? squareToIndex(move.from) : -1;
-    const to = move ? squareToIndex(move.to) : -1;
-    const code = from >= 0 ? previous[from] : null;
-    if (!wasPending && code && to >= 0) {
-      this.animation = { from, to, code, startedAt: performance.now() };
-      requestAnimationFrame(this.animate);
-    } else {
-      this.animation = null;
-      this.redraw();
-    }
-  }
-
-  redraw(): void {
-    const css = this.canvas.clientWidth || 600;
-    const dpr = window.devicePixelRatio || 1;
-    if (this.canvas.width !== Math.round(css * dpr)) {
-      this.canvas.width = Math.round(css * dpr);
-      this.canvas.height = Math.round(css * dpr);
-    }
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.ctx.clearRect(0, 0, css, css);
-    if (this.board) this.ctx.drawImage(this.board, 0, 0, css, css);
-    for (const index of this.highlighted) this.paint(index, "rgba(216,169,78,.3)");
-    if (this.selected !== null) {
-      this.paint(this.selected, "rgba(246,240,228,.24)");
-      for (const target of this.legal.get(this.selected) ?? []) this.target(target);
-    }
-    if (document.activeElement === this.canvas)
-      this.paint(this.keyboardIndex, "rgba(255,255,255,.18)", true);
-    for (let index = 0; index < 64; index++) {
-      if (this.drag?.from === index && this.drag.moved) continue;
-      if (this.animation?.to === index) continue;
-      this.drawPiece(index, this.placement[index] ?? null);
-    }
-    if (this.animation) {
-      const elapsed = Math.min(1, (performance.now() - this.animation.startedAt) / 180);
-      const eased = 1 - (1 - elapsed) ** 3;
-      const from = this.rect(this.animation.from);
-      const to = this.rect(this.animation.to);
-      const image = this.pieces.get(this.animation.code);
-      if (image) this.ctx.drawImage(image, from.x + (to.x - from.x) * eased, from.y + (to.y - from.y) * eased, from.size, from.size);
-    }
-    if (this.drag?.moved) {
-      const piece = this.placement[this.drag.from];
-      const image = piece ? this.pieces.get(piece) : null;
-      const size = css / 8;
-      if (image) {
-        this.ctx.save();
-        this.ctx.shadowColor = "rgba(0,0,0,.55)";
-        this.ctx.shadowBlur = 20;
-        this.ctx.drawImage(image, this.drag.x - size * .56, this.drag.y - size * .62, size * 1.12, size * 1.12);
-        this.ctx.restore();
-      }
-    }
-  }
-
-  private rect(index: number): { x: number; y: number; size: number } {
-    const size = (this.canvas.clientWidth || 600) / 8;
-    const file = index % 8;
-    const rank = Math.floor(index / 8);
-    return {
-      x: (this.orientation === "w" ? file : 7 - file) * size,
-      y: (this.orientation === "w" ? rank : 7 - rank) * size,
-      size,
-    };
-  }
-
-  private drawPiece(index: number, code: string | null): void {
-    const image = code ? this.pieces.get(code) : null;
-    if (!image) return;
-    const { x, y, size } = this.rect(index);
-    this.ctx.drawImage(image, x + size * .03, y + size * .01, size * .94, size * .94);
-  }
-
-  private paint(index: number, fill: string, outline = false): void {
-    const { x, y, size } = this.rect(index);
-    if (outline) {
-      this.ctx.strokeStyle = fill;
-      this.ctx.lineWidth = 2;
-      this.ctx.strokeRect(x + 2, y + 2, size - 4, size - 4);
-    } else {
-      this.ctx.fillStyle = fill;
-      this.ctx.fillRect(x, y, size, size);
-    }
-  }
-
-  private target(index: number): void {
-    const { x, y, size } = this.rect(index);
-    const occupied = this.placement[index] !== null;
-    this.ctx.beginPath();
-    this.ctx.arc(x + size / 2, y + size / 2, size * (occupied ? .38 : .12), 0, Math.PI * 2);
-    this.ctx.fillStyle = occupied ? "transparent" : "rgba(13,18,15,.42)";
-    this.ctx.strokeStyle = "rgba(216,169,78,.8)";
-    this.ctx.lineWidth = occupied ? 4 : 2;
-    this.ctx.fill();
-    this.ctx.stroke();
-  }
-
-  private eventIndex(event: PointerEvent): number {
-    const bounds = this.canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(7, Math.floor(((event.clientX - bounds.left) / bounds.width) * 8)));
-    const y = Math.max(0, Math.min(7, Math.floor(((event.clientY - bounds.top) / bounds.height) * 8)));
-    const file = this.orientation === "w" ? x : 7 - x;
-    const rank = this.orientation === "w" ? y : 7 - y;
-    return rank * 8 + file;
-  }
-
-  private pointerDown = (event: PointerEvent): void => {
-    if (!this.interactive || this.pending || (event.pointerType === "mouse" && event.button !== 0)) return;
-    const index = this.eventIndex(event);
-    if (this.selected !== null && this.legal.get(this.selected)?.has(index)) {
-      this.commit(this.selected, index);
-      return;
-    }
-    if (!this.isMine(index) || !this.legal.has(index)) return;
-    this.selected = index;
-    const bounds = this.canvas.getBoundingClientRect();
-    this.drag = { pointerId: event.pointerId, from: index, x: event.clientX - bounds.left, y: event.clientY - bounds.top, moved: false };
-    this.canvas.setPointerCapture(event.pointerId);
-    this.onFeedback("pickup");
-    this.redraw();
-  };
-
-  private pointerMove = (event: PointerEvent): void => {
-    if (!this.drag || this.drag.pointerId !== event.pointerId) return;
-    const bounds = this.canvas.getBoundingClientRect();
-    const x = event.clientX - bounds.left;
-    const y = event.clientY - bounds.top;
-    if (Math.hypot(x - this.drag.x, y - this.drag.y) > 5) this.drag.moved = true;
-    this.drag.x = x;
-    this.drag.y = y;
-    this.redraw();
-  };
-
-  private pointerUp = (event: PointerEvent): void => {
-    if (!this.drag || this.drag.pointerId !== event.pointerId) return;
-    const drag = this.drag;
-    this.drag = null;
-    const target = this.eventIndex(event);
-    if (drag.moved) {
-      if (this.legal.get(drag.from)?.has(target)) this.commit(drag.from, target);
-      else {
-        this.selected = null;
-        this.onFeedback("invalid");
-        this.redraw();
-      }
-    } else this.redraw();
-  };
-
-  private pointerCancel = (): void => { this.drag = null; this.selected = null; this.redraw(); };
-  private animate = (): void => {
-    if (!this.animation) return;
-    if (performance.now() - this.animation.startedAt >= 180) {
-      this.animation = null;
-      this.redraw();
-      return;
-    }
-    this.redraw();
-    requestAnimationFrame(this.animate);
-  };
-  private keyDown = (event: KeyboardEvent): void => {
-    if (event.key.startsWith("Arrow")) {
-      event.preventDefault();
-      this.keyboardIndex = this.keyboardMove(this.keyboardIndex, event.key);
-      this.redraw();
-    } else if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      this.choose(this.keyboardIndex);
-    } else if (event.key === "Escape") {
-      this.selected = null;
-      this.redraw();
-    }
-  };
-
-  destroy(): void {
-    this.canvas.removeEventListener("pointerdown", this.pointerDown);
-    this.canvas.removeEventListener("pointermove", this.pointerMove);
-    this.canvas.removeEventListener("pointerup", this.pointerUp);
-    this.canvas.removeEventListener("pointercancel", this.pointerCancel);
-    this.canvas.removeEventListener("keydown", this.keyDown);
-    this.canvas.remove();
-  }
-}
 
 declare global {
   interface Window {
@@ -445,9 +215,9 @@ export class VexelBoard extends InteractiveBoard {
       onRuntimeInitialized: () => {
         clearTimeout(this.startupTimer);
         console.info("[chess-board] renderer=vexel");
-        // Emscripten fija el tamaño CSS del canvas a 600 px con !important.
-        // El backing store permanece a 600², pero visualmente debe seguir al
-        // contenedor para no recortarse en móvil.
+        // Emscripten fija el tamaÃ±o CSS del canvas a 600 px con !important.
+        // El backing store permanece a 600Â², pero visualmente debe seguir al
+        // contenedor para no recortarse en mÃ³vil.
         fitCanvas();
         requestAnimationFrame(fitCanvas);
         this.ready = true;
@@ -459,7 +229,7 @@ export class VexelBoard extends InteractiveBoard {
     this.script.src = `${base}/ajedrez.js?v=${encodeURIComponent(GAME_ASSET_VERSION)}`;
     this.script.onerror = () => this.fail("No se pudo cargar el runtime de Vexel");
     document.body.appendChild(this.script);
-    this.startupTimer = setTimeout(() => this.fail("Vexel tardó demasiado en iniciar"), 12_000);
+    this.startupTimer = setTimeout(() => this.fail("Vexel tardÃ³ demasiado en iniciar"), 12_000);
   }
 
   private fail(reason: string): void {
@@ -668,21 +438,11 @@ export class VexelBoard extends InteractiveBoard {
   }
 }
 
-export type BoardKind = "vexel" | "canvas";
-
 export function createBoard(
   container: HTMLElement,
   onMove: MoveFn,
-  kind: BoardKind,
   onFeedback: FeedbackFn = () => {},
   onUnavailable: (reason: string) => void = () => {},
 ): BoardController {
-  if (kind === "canvas") {
-    const canvas = document.createElement("canvas");
-    canvas.id = "board";
-    container.appendChild(canvas);
-    console.info("[chess-board] renderer=canvas");
-    return new CanvasBoard(canvas, onMove, onFeedback);
-  }
   return new VexelBoard(container, onMove, onFeedback, onUnavailable);
 }

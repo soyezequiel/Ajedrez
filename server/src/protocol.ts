@@ -33,6 +33,8 @@ export interface RoomView {
   hostNpub: string;
   phase: RoomPhase;
   players: RoomPlayer[];
+  /** Tiempo inicial por jugador; actualmente no hay incremento. */
+  clockMs: number;
 }
 
 export type AchievementId =
@@ -76,6 +78,7 @@ export type ClientMessage =
   /** Re-login por token de sesión (evita re-firmar en cada reload/reconexión). */
   | { t: "auth_token"; token: string }
   | { t: "create_room" }
+  | { t: "set_time_control"; clockMinutes: number }
   | { t: "join_room"; roomId?: string; code?: string }
   /** Room Link: entra/crea la sala por su código externo de 4 caracteres (`?join=5XRR`). */
   | { t: "enter_room"; roomId: string }

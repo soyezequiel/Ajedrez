@@ -7,7 +7,7 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { config } from "./config.js";
 import { MatchError } from "./chessMatch.js";
-import { Room, RoomError, RoomManager } from "./rooms.js";
+import { Room, RoomError, RoomManager, clockMsFromMinutes } from "./rooms.js";
 import {
   AuthError,
   issueSessionToken,
@@ -163,6 +163,8 @@ async function handleMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
   switch (msg.t) {
     case "create_room":
       return handleCreate(ws, state);
+    case "set_time_control":
+      return handleSetTimeControl(ws, state, msg.clockMinutes);
     case "join_room":
       return handleJoin(ws, state, msg.roomId, msg.code);
     case "enter_room":
@@ -397,6 +399,17 @@ function handleMove(ws: WebSocket, state: ConnState, requestId: string, move: Mo
     }
     throw error;
   }
+}
+
+function handleSetTimeControl(ws: WebSocket, state: ConnState, clockMinutes: number): void {
+  const room = currentRoom(state);
+  const me = identity(state);
+  if (me.npub !== room.hostNpub)
+    return send(ws, { t: "error", code: "NOT_HOST", message: "Solo el anfitrión configura el tiempo" });
+  room.setClockMs(clockMsFromMinutes(clockMinutes));
+  // Si alguien ya había pulsado Listo, debe confirmar nuevamente el nuevo ritmo.
+  readyByRoom.delete(room.id);
+  broadcastRoom(room);
 }
 
 function handleResign(ws: WebSocket, state: ConnState): void {
@@ -652,6 +665,9 @@ function finishMatch(room: Room): void {
     winnerNpubs: winners,
     ratings,
   });
+  // Sincroniza `phase=finished` en los clientes; `ended` contiene el resultado,
+  // mientras `room` mantiene correctas las decisiones de revancha/nuevo rival.
+  broadcastRoom(room);
   const updates = mastery.recordMatch({
     matchId: room.match.matchId,
     players: room.roster,
@@ -765,6 +781,7 @@ function roomView(room: Room): RoomView {
     hostNpub: room.hostNpub,
     phase: room.phase,
     players: room.roster,
+    clockMs: room.clockMs,
   };
 }
 

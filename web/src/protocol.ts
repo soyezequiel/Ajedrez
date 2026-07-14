@@ -79,6 +79,8 @@ export interface RoomView {
   hostNpub: string;
   phase: RoomPhase;
   players: RoomPlayer[];
+  /** Tiempo inicial por jugador; actualmente no hay incremento. */
+  clockMs: number;
 }
 
 export type AchievementId =
@@ -118,6 +120,7 @@ export type ClientMessage =
   | { t: "auth_nostr"; event: NostrEvent; displayName?: string }
   | { t: "auth_token"; token: string }
   | { t: "create_room" }
+  | { t: "set_time_control"; clockMinutes: number }
   | { t: "join_room"; roomId?: string; code?: string }
   | { t: "enter_room"; roomId: string }
   | { t: "ready" }

@@ -9,10 +9,10 @@ mkdirSync(join(TEX, "pieces"), { recursive: true });
 
 const LIGHT = "#dfc59c";
 const DARK = "#765039";
-const WHITE_FILL = "#f1e5cf";
-const WHITE_STROKE = "#3b2b20";
-const BLACK_FILL = "#17241d";
-const BLACK_STROKE = "#07100b";
+const WHITE_FILL = "#f3e7d0";
+const WHITE_STROKE = "#34251c";
+const BLACK_FILL = "#20372b";
+const BLACK_STROKE = "#07130d";
 
 const CELL = 64;
 let squares = "";
@@ -32,12 +32,26 @@ writeFileSync(join(TEX, "select.svg"), `<svg xmlns="http://www.w3.org/2000/svg" 
 
 function body(kind) {
   const shapes = {
-    P: `<circle cx="32" cy="17" r="8"/><path d="M25 25h14l3 17H22z"/><path d="M18 44h28l3 7H15z"/><rect x="12" y="51" width="40" height="6" rx="2"/>`,
-    R: `<path d="M17 10h7v6h5v-6h6v6h5v-6h7v13H17z"/><path d="M21 23h22l-3 23H24z"/><path d="M18 45h28l3 7H15z"/><rect x="12" y="52" width="40" height="5" rx="2"/>`,
-    N: `<path d="M18 49c3-12 5-20 12-27l-4-9 11 4 6 8c4 7 2 17-4 23l-7-8-8 9z"/><path d="M23 30c5-1 9-4 13-8" fill="none"/><circle cx="37" cy="25" r="1.7"/><path d="M16 49h31l4 8H12z"/>`,
-    B: `<path d="M32 8c8 7 11 13 8 19-2 4-5 6-8 8-4-2-7-4-9-8-3-6 1-12 9-19z"/><path d="M33 13l-6 14" fill="none"/><path d="M24 34h16l4 13H20z"/><path d="M17 47h30l4 10H13z"/>`,
-    Q: `<path d="M16 22l4-11 8 10 4-13 5 13 8-10 3 11-7 13H23z"/><circle cx="20" cy="10" r="3"/><circle cx="32" cy="7" r="3"/><circle cx="45" cy="10" r="3"/><path d="M23 34h18l4 14H19z"/><path d="M15 48h34l4 9H11z"/>`,
-    K: `<path d="M29 7h6v7h7v6h-7v7h-6v-7h-7v-6h7z"/><path d="M21 27c4-5 18-5 22 0l-4 9H25z"/><path d="M24 35h16l4 13H20z"/><path d="M15 48h34l4 9H11z"/>`,
+    // Cada silueta tiene una altura, corona y cuerpo propios para poder
+    // reconocerla incluso a 48 px y durante un arrastre rápido.
+    P: `<circle cx="32" cy="17" r="8.5"/><path d="M26 25h12l2 5-4 4 5 12H23l5-12-4-4z"/><path d="M19 45h26l4 7H15z"/><rect x="12" y="52" width="40" height="5" rx="2"/>`,
+    R: `<path d="M14 10h8v7h6v-7h8v7h6v-7h8v15H14z"/><rect x="19" y="25" width="26" height="6" rx="1"/><path d="M22 31h20l-3 15H25z"/><path d="M17 45h30l4 7H13z"/><rect x="10" y="52" width="44" height="5" rx="2"/>`,
+    N: `<path d="M16 48c2-11 6-21 14-29l-3-9 9 4 4 5c9 5 11 16 5 25l-5 6-10-12-7 10z"/><path d="M22 29c6-1 11-5 15-10" fill="none"/><path d="M39 23l5 4-5 2" fill="none"/><circle cx="38" cy="22" r="2"/><path d="M15 48h34l4 9H11z"/>`,
+    B: `<path d="M32 6c9 8 13 15 10 22-2 4-5 7-10 10-5-3-8-6-10-10-3-7 1-14 10-22z"/><path d="M35 12L27 29" fill="none"/><path d="M24 37h16l4 10H20z"/><path d="M16 47h32l4 10H12z"/>`,
+    Q: `<path d="M13 22l5-12 9 10 5-14 5 14 9-10 5 12-8 14H21z"/><circle cx="18" cy="9" r="3"/><circle cx="32" cy="5" r="3"/><circle cx="46" cy="9" r="3"/><path d="M22 35h20l4 13H18z"/><path d="M14 48h36l4 9H10z"/>`,
+    K: `<path d="M28 5h8v8h8v7h-8v8h-8v-8h-8v-7h8z"/><path d="M20 30c3-4 8-6 12-6s9 2 12 6l-5 9H25z"/><path d="M23 38h18l4 10H19z"/><path d="M14 48h36l4 9H10z"/>`,
+  };
+  return shapes[kind];
+}
+
+function details(kind) {
+  const shapes = {
+    P: `<path d="M26 30h12M24 46h16"/>`,
+    R: `<path d="M19 25h26M22 31h20M18 46h28"/>`,
+    N: `<path d="M23 48h24"/>`,
+    B: `<path d="M24 38h16M21 47h22"/>`,
+    Q: `<path d="M21 35h22M20 48h24"/>`,
+    K: `<path d="M25 38h14M20 48h24"/>`,
   };
   return shapes[kind];
 }
@@ -46,10 +60,16 @@ function pieceSvg(code) {
   const isWhite = code[0] === "w";
   const fill = isWhite ? WHITE_FILL : BLACK_FILL;
   const stroke = isWhite ? WHITE_STROKE : BLACK_STROKE;
-  const highlight = isWhite ? "#fff8e9" : "#314b3b";
+  const highlight = isWhite ? "#fffaf0" : "#45624f";
+  const detail = isWhite ? "#7f6550" : "#6f8d76";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-    <defs><linearGradient id="face" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${highlight}"/><stop offset="1" stop-color="${fill}"/></linearGradient></defs>
-    <g fill="url(#face)" stroke="${stroke}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">${body(code[1])}</g>
+    <defs>
+      <linearGradient id="face" x1="0" y1="0" x2=".8" y2="1">
+        <stop stop-color="${highlight}"/><stop offset=".52" stop-color="${fill}"/><stop offset="1" stop-color="${isWhite ? "#dfcfb3" : "#17291f"}"/>
+      </linearGradient>
+    </defs>
+    <g fill="url(#face)" stroke="${stroke}" stroke-width="2.35" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill">${body(code[1])}</g>
+    <g fill="none" stroke="${detail}" stroke-opacity=".72" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round">${details(code[1])}</g>
   </svg>\n`;
 }
 

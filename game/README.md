@@ -34,8 +34,8 @@ El shell de Vite carga `bin/ajedrez.html` en un **iframe** y se comunican por
 - Shell → motor: `{ type: "chess:applyFen", fen }`, `{ type: "chess:setInteractive", on }`.
 - Motor → shell: `{ type: "chess:move", from, to, promo }`, `{ type: "chess:ready" }`.
 
-Para el swap, reemplazar `web/src/board.ts` (CanvasBoard) por un `VexelBoard` que
-cree el iframe y traduzca ese mismo contrato — la red y la UI no cambian.
+El shell web integra este motor directamente mediante `web/src/board.ts`; Vexel
+es el único renderer del tablero.
 
 
 ## Estructura
