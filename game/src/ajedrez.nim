@@ -795,20 +795,33 @@ proc frame() =
 
   graphics.clear(world, windowId of Texture, depthId)
   graphics.render(world, raster(boardRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(highlightRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(selectRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(legalRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(captureRasterizer, spriteCameraId, drawModels()))
+  if lastMove.len > 0:
+    graphics.render(world, raster(highlightRasterizer, spriteCameraId, drawModels()))
+  if selected.isSome or keyboardFocused or hoverSquare.isSome:
+    graphics.render(world, raster(selectRasterizer, spriteCameraId, drawModels()))
+  if selected.isSome:
+    graphics.render(world, raster(legalRasterizer, spriteCameraId, drawModels()))
+    graphics.render(world, raster(captureRasterizer, spriteCameraId, drawModels()))
   for _, rasterizerId in pieceRasterizers:
     graphics.render(world, raster(rasterizerId, spriteCameraId, drawModels()))
-  graphics.render(world, raster(coordsWhiteRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(coordsBlackRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(trailRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(ringRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(sparkRasterizer, spriteCameraId, drawModels()))
-  graphics.render(world, raster(veilRasterizer, spriteCameraId, drawModels()))
-  for _, rasterizerId in countdownRasterizers:
-    graphics.render(world, raster(rasterizerId, spriteCameraId, drawModels()))
+  let coordsRasterizer = if flipped: coordsBlackRasterizer else: coordsWhiteRasterizer
+  graphics.render(world, raster(coordsRasterizer, spriteCameraId, drawModels()))
+  var trailVisible = false
+  for effect in trails:
+    if effect.active:
+      trailVisible = true
+      break
+  if trailVisible:
+    graphics.render(world, raster(trailRasterizer, spriteCameraId, drawModels()))
+  if liftActive or impactActive or hoverSquare.isSome:
+    graphics.render(world, raster(ringRasterizer, spriteCameraId, drawModels()))
+  if impactActive:
+    graphics.render(world, raster(sparkRasterizer, spriteCameraId, drawModels()))
+  if countdownActive:
+    graphics.render(world, raster(veilRasterizer, spriteCameraId, drawModels()))
+    if countdownStage >= 0 and countdownStage < 4:
+      let label = ["3", "2", "1", "go"][countdownStage]
+      graphics.render(world, raster(countdownRasterizers[label], spriteCameraId, drawModels()))
 
   graphics.endFrame(world)
   windows.endFrame(world)

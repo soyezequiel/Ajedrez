@@ -3,5 +3,9 @@
 
 @fragment
 fn main(input: Interface) -> @location(0) vec4f {
-  return textureSample(mainTexture, mainSampler, input.uv);
+  let color = textureSample(mainTexture, mainSampler, input.uv);
+  if color.a < 0.01 {
+    discard;
+  }
+  return color;
 }

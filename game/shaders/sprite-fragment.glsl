@@ -2,5 +2,7 @@
 #include <layout.glsl>
 
 void main() {
-    outputColor = texture(sampler2D(mainTexture, mainSampler), inputUv);
+    vec4 color = texture(sampler2D(mainTexture, mainSampler), inputUv);
+    if (color.a < 0.01) discard;
+    outputColor = color;
 }

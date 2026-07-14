@@ -18,21 +18,22 @@ when defined(emscripten):
   switch("clang.exe", emscriptenSdk / "emcc")
   switch("clang.linkerexe", emscriptenSdk / "emcc")
 
-  switch("passL", "-o bin/ajedrez.html")
-  switch("passL", "--shell-file shell.html")
-  switch("passL", "--preload-file shaders")
-  switch("passL", "--preload-file textures/board.png")
-  switch("passL", "--preload-file textures/highlight.png")
-  switch("passL", "--preload-file textures/select.png")
-  switch("passL", "--preload-file textures/pieces")
-  switch("passL", "--preload-file textures/effects")
-  switch("passL", "--preload-file textures/coordinates")
-  switch("passL", "--preload-file textures/countdown")
+  switch("passL", "-o bin/ajedrez.js")
+  switch("passL", "--embed-file shaders")
+  switch("passL", "--embed-file textures/board.png")
+  switch("passL", "--embed-file textures/highlight.png")
+  switch("passL", "--embed-file textures/select.png")
+  switch("passL", "--embed-file textures/pieces")
+  switch("passL", "--embed-file textures/effects")
+  switch("passL", "--embed-file textures/coordinates")
+  switch("passL", "--embed-file textures/countdown")
 
   # Interop JS↔WASM: exponer las funciones del juego y ccall/cwrap.
   switch("passL", "-sEXPORTED_FUNCTIONS=_main,_applyFen,_applyFenAnimated,_setInteractive,_setOrientation,_highlight,_setLegalMoves,_pointerDown,_pointerMove,_pointerUp,_pointerCancel,_keyInput,_setKeyboardFocus,_rejectMove,_confirmMove,_showCountdown")
   switch("passL", "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap")
   switch("passL", "-sALLOW_MEMORY_GROWTH=1")
+  when defined(release):
+    switch("passL", "-O3")
 
   --d:wasm
   --gc:orc

@@ -19,7 +19,7 @@ export interface BoardController {
 
 const GAME_BASE = (import.meta.env.VITE_GAME_BASE as string | undefined) ?? "/game";
 // ajedrez.js, ajedrez.wasm y ajedrez.data son una unidad inseparable.
-const GAME_ASSET_VERSION = (import.meta.env.VITE_GAME_ASSET_VERSION as string | undefined) ?? "vexel-native-input-20260714-2";
+const GAME_ASSET_VERSION = (import.meta.env.VITE_GAME_ASSET_VERSION as string | undefined) ?? "vexel-alpha-depth-20260714-1";
 const GAME_SIZE = 600;
 
 
@@ -85,6 +85,9 @@ export class VexelBoard implements BoardController {
   private failed = false;
   private readonly startupTimer: ReturnType<typeof setTimeout>;
   private pointerId: number | null = null;
+  private pointerFrame: number | null = null;
+  private pendingPointerMove: [number, number] | null = null;
+  private pointerBounds: DOMRect | null = null;
   private placement: (string | null)[] = new Array(64).fill(null);
   private lastFen = "";
   private pending = false;
@@ -169,12 +172,20 @@ export class VexelBoard implements BoardController {
   }
 
   private coordinates(event: PointerEvent): [number, number] {
-    const bounds = this.canvas.getBoundingClientRect();
+    const bounds = this.pointerBounds ?? this.canvas.getBoundingClientRect();
     return [
       ((event.clientX - bounds.left) / bounds.width) * GAME_SIZE,
       ((event.clientY - bounds.top) / bounds.height) * GAME_SIZE,
     ];
   }
+
+  private flushPointerMove = (): void => {
+    this.pointerFrame = null;
+    const position = this.pendingPointerMove;
+    this.pendingPointerMove = null;
+    if (!position || this.pointerId === null) return;
+    this.call("pointerMove", ["number", "number"], position);
+  };
 
   applyFen(fen: string, move?: MovePayload | null): void {
     const previous = this.placement;
@@ -231,6 +242,7 @@ export class VexelBoard implements BoardController {
   private pointerDown = (event: PointerEvent): void => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
     this.pointerId = event.pointerId;
+    this.pointerBounds = this.canvas.getBoundingClientRect();
     this.canvas.setPointerCapture(event.pointerId);
     this.canvas.focus({ preventScroll: true });
     const [x, y] = this.coordinates(event);
@@ -239,22 +251,30 @@ export class VexelBoard implements BoardController {
 
   private pointerMove = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
-    const [x, y] = this.coordinates(event);
-    this.call("pointerMove", ["number", "number"], [x, y]);
+    this.pendingPointerMove = this.coordinates(event);
+    if (this.pointerFrame === null) this.pointerFrame = requestAnimationFrame(this.flushPointerMove);
   };
 
   private pointerUp = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
+    if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
+    this.pointerFrame = null;
+    this.pendingPointerMove = null;
     const [x, y] = this.coordinates(event);
     this.call("pointerUp", ["number", "number"], [x, y]);
     this.canvas.releasePointerCapture(event.pointerId);
     this.pointerId = null;
+    this.pointerBounds = null;
   };
 
   private pointerCancel = (event: PointerEvent): void => {
     if (this.pointerId !== event.pointerId) return;
+    if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
+    this.pointerFrame = null;
+    this.pendingPointerMove = null;
     this.call("pointerCancel", [], []);
     this.pointerId = null;
+    this.pointerBounds = null;
   };
 
   private keyDown = (event: KeyboardEvent): void => {
@@ -271,6 +291,7 @@ export class VexelBoard implements BoardController {
   private blur = (): void => this.call("setKeyboardFocus", ["number"], [0]);
 
   destroy(): void {
+    if (this.pointerFrame !== null) cancelAnimationFrame(this.pointerFrame);
     clearTimeout(this.startupTimer);
     this.canvasStyleObserver.disconnect();
     this.canvas.removeEventListener("pointerdown", this.pointerDown);

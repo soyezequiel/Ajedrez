@@ -1467,7 +1467,7 @@ function openTechnologyIntro(trigger: HTMLButtonElement): void {
       <header class="technology-intro-header">
         <div class="technology-intro-heading">
           <span class="technology-engine-mark" aria-hidden="true"><i></i></span>
-          <div><span>Motor gráfico</span><strong id="technology-intro-title">Vexel</strong></div>
+          <div><span>Motor de juegos</span><strong id="technology-intro-title">Vexel</strong></div>
         </div>
         <button class="technology-intro-close" type="button" aria-label="Cerrar intro de Vexel"><span aria-hidden="true">×</span></button>
       </header>
