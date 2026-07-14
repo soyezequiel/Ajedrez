@@ -93,7 +93,9 @@ const webDist = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web",
 if (existsSync(webDist)) {
   app.use((_req, res, next) => {
     // Cross-origin isolation: el tablero Vexel usa SharedArrayBuffer (-pthread).
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    // `restrict-properties` mantiene SharedArrayBuffer con COEP y conserva
+    // window.opener.postMessage para BAL.
+    res.setHeader("Cross-Origin-Opener-Policy", "restrict-properties");
     res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
     next();
   });

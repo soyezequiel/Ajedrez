@@ -168,6 +168,81 @@ input[readonly] { color: var(--muted); font-family: var(--mono); font-size: 12px
 .login input { text-align: center; }
 .login .fine { margin-top: 28px; }
 .login .stack .fine { margin-top: 0; }
+.bal-consent {
+  width: min(440px, 100%);
+  margin: 28px auto 0;
+  padding: 24px;
+  border: 1px solid var(--gold-dark);
+  border-radius: var(--radius-lg);
+  background: rgba(20, 28, 23, .9);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .35), 0 0 36px rgba(216, 169, 78, .08);
+}
+.bal-consent-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 14px;
+  border: 1px solid var(--gold-dark);
+  border-radius: 50%;
+  background: var(--gold-bg);
+  color: var(--gold);
+  font-family: var(--serif);
+  font-size: 26px;
+}
+.bal-consent-kicker {
+  margin: 0;
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+.bal-consent h2 {
+  margin: 8px 0 0;
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.08;
+}
+.bal-consent .muted { margin-top: 12px; }
+.bal-consent-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 20px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  text-align: left;
+}
+.bal-consent-step > span {
+  display: grid;
+  flex: 0 0 26px;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: var(--gold-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+.bal-consent-step p { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.bal-consent-step b { color: var(--text); font-weight: 600; }
+.bal-consent-action { width: 100%; }
+.bal-focus-help {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--gold-bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.bal-focus-help[hidden] { display: none; }
+.bal-focus-help b { color: var(--gold); }
+.bal-consent .fine { margin: 14px 0 0; }
 .challenge-banner {
   position: fixed; right: 24px; bottom: 24px;
   z-index: 50; display: flex; align-items: center; gap: 18px;

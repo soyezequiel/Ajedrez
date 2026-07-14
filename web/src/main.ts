@@ -13,12 +13,14 @@ import {
   importNsec,
   restoreSigner,
   setActiveSigner,
+  setEphemeralActiveSigner,
   signAuthChallenge,
   toNgpSigner,
   updateStoredPubkey,
   waitForNip07,
   type ChessSigner,
 } from "./nostr/signer-core.js";
+import { logoutBal, requestBalLauncherFocus, tryBalLogin } from "./nostr/bal-login.js";
 import { connectBunker, startNostrConnect } from "./nostr/signer-nip46.js";
 import QRCode from "qrcode";
 import { fetchProfile, fetchProfiles, type NostrProfile } from "./nostr/relays.js";
@@ -148,6 +150,7 @@ function ensurePresence(): PresenceController | null {
 window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
   presence?.clearNow();
+  void logoutBal();
 });
 
 // OJO: acá NO hay gating por `visibilitychange` — es a propósito y ya se probó
@@ -269,9 +272,32 @@ function start(): void {
     else logout();
   });
   wireNet();
+  void startLoginFlow();
+}
+
+async function startLoginFlow(): Promise<void> {
+  // BAL tiene prioridad cuando Luna Negra conserva el canal opener. No usamos un
+  // token viejo: get_public_key debe fijar la identidad activa elegida por Luna.
+  const balSigner = await tryBalLogin(
+    () => {
+      clearActiveSigner();
+      clearSessionToken();
+      login = null;
+      state.identity = null;
+      renderLogin();
+    },
+    renderBalConsentRequired,
+  );
+  if (balSigner) {
+    clearSessionToken();
+    setEphemeralActiveSigner(balSigner);
+    await beginNostr(balSigner);
+    return;
+  }
+
   // Con token: sesión inmediata sin depender del firmador (se restaura de fondo).
   const token = readSessionToken();
-  if (token) return void authViaToken(token);
+  if (token) return authViaToken(token);
   // Sin token pero con firmador guardado (raro): restaurar y firmar el challenge.
   if (hasStoredSigner()) return void restoreNostr();
   const name = storedName();
@@ -524,6 +550,9 @@ function loginLocal(nsec?: string): void {
 
 /** Cierra la sesión (Nostr o invitado) y vuelve al login. */
 function logout(): void {
+  // El logout explícito sí olvida el launcher. Los reloads internos (p. ej. al
+  // salir de una sala) usan logoutBal() sin esta opción para poder reconectar BAL.
+  void logoutBal({ forgetLauncher: true });
   clearActiveSigner();
   clearSessionToken();
   clearSavedRoom();
@@ -1259,6 +1288,39 @@ function renderConnecting(): void {
       renderLogin();
     }
   }, 12_000);
+}
+
+function renderBalConsentRequired(): void {
+  clearConnectWatchdog();
+  app.innerHTML = shell(`
+    <div class="bal-consent" role="status" aria-live="polite">
+      <div class="bal-consent-icon" aria-hidden="true">✒</div>
+      <p class="bal-consent-kicker">IDENTIDAD NOSTR</p>
+      <h2>Autorizá la firma en Luna Negra</h2>
+      <p class="muted">
+        Luna Negra necesita tu permiso para que Ajedrez use tu identidad.
+        Tu clave privada nunca se comparte con el juego.
+      </p>
+      <div class="bal-consent-step">
+        <span aria-hidden="true">1</span>
+        <p>Volvé a Luna Negra y elegí <b>Permitir esta vez</b> o <b>Permitir y recordar</b>.</p>
+      </div>
+      <button class="btn-gold bal-consent-action" id="bal-consent-focus">
+        Ir a Luna Negra para autorizar
+      </button>
+      <p class="bal-focus-help" id="bal-focus-help" hidden>
+        Si seguís viendo Ajedrez, el navegador bloqueó el cambio automático.
+        Abrí el selector de pestañas y tocá <b>⚠ Luna Negra</b>.
+      </p>
+      <p class="fine">Cuando lo apruebes, Ajedrez continuará automáticamente.</p>
+    </div>`);
+  const focusButton = document.getElementById("bal-consent-focus") as HTMLButtonElement;
+  const focusHelp = document.getElementById("bal-focus-help")!;
+  focusButton.addEventListener("click", () => {
+    requestBalLauncherFocus();
+    focusButton.textContent = "Buscá la pestaña ⚠ Luna Negra";
+    focusHelp.hidden = false;
+  });
 }
 
 function renderConnError(): void {

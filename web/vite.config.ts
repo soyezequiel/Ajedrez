@@ -3,7 +3,9 @@ import { defineConfig } from "vite";
 // El juego Vexel usa -pthread (SharedArrayBuffer) → la página necesita
 // cross-origin isolation (COOP/COEP). Lo aplicamos a dev y preview.
 const isolation = {
-  "Cross-Origin-Opener-Policy": "same-origin",
+  // Conserva window.opener.postMessage para BAL sin perder crossOriginIsolated
+  // en navegadores que implementan COOP restrict-properties.
+  "Cross-Origin-Opener-Policy": "restrict-properties",
   "Cross-Origin-Embedder-Policy": "require-corp",
 };
 

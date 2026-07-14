@@ -73,7 +73,9 @@ $remote = @(
   # Sacamos posibles contenedores viejos que retienen el nombre `ajedrez` (el túnel
   # rutea a ese nombre) o el puerto 8790 (deploy anterior `ajedrez-server`). `|| true`:
   # no existir es OK.
-  "docker rm -f ajedrez ajedrez-server 2>/dev/null || true",
+  # Los parentesis son importantes: sin agrupar este `|| true`, el shell puede
+  # convertir en exitoso un fallo anterior del build y continuar con la imagen vieja.
+  "(docker rm -f ajedrez ajedrez-server 2>/dev/null || true)",
   # Recambio rápido: el `up` recrea el contenedor con la imagen recién buildeada.
   "cd ~/$RemoteDir && BUILD_ID='$buildId' docker compose up -d --wait",
   "rm ~/ajedrez-update.tgz"

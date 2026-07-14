@@ -137,6 +137,12 @@ export function setActiveSigner(signer: ChessSigner, stored: StoredSigner): void
   writeStoredSigner(stored);
 }
 
+/** Activa un signer efímero (BAL) sin persistir URI ni credenciales NIP-46. */
+export function setEphemeralActiveSigner(signer: ChessSigner): void {
+  active = signer;
+  writeStoredSigner(null);
+}
+
 export function clearActiveSigner(): void {
   const prev = active;
   active = null;
