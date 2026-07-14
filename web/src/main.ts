@@ -243,6 +243,11 @@ function start(): void {
   // partida pide confirmación: salir implica abandonar.
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
+    const technologyBtn = target.closest?.("[data-action=technology]") as HTMLButtonElement | null;
+    if (technologyBtn) {
+      openTechnologyIntro(technologyBtn);
+      return;
+    }
     const soundBtn = target.closest?.("[data-action=sound]") as HTMLButtonElement | null;
     if (soundBtn) {
       setSoundEnabled(!soundEnabled());
@@ -1424,16 +1429,90 @@ function showGeneratedKey(): void {
 
 function topbar(): string {
   const id = state.identity;
+  const technologyBtn = `<button class="icon-btn technology-button" data-action="technology" aria-label="Tecnología usada: Vexel" title="Tecnología usada">
+    <span class="technology-button-icon" aria-hidden="true"><i></i></span><span>Tecnología usada</span>
+  </button>`;
   const soundBtn = `<button class="icon-btn" data-action="sound" aria-label="${soundEnabled() ? "Sonido: silenciar" : "Sonido: activar"}" title="Sonido">${soundEnabled() ? "●" : "○"}<span>Sonido</span></button>`;
   const hapticBtn = `<button class="icon-btn haptic-control" data-action="haptics" aria-label="Háptica: alternar respuesta" title="Háptica">${hapticsEnabled() ? "Háptica activa" : "Háptica apagada"}</button>`;
   return `
     <header class="topbar">
       <span class="brand"><span class="mark">A</span><span>Ajedrez<small>Club social</small></span></span>
       <span class="spacer"></span>
+      ${technologyBtn}
       ${soundBtn}
       ${hapticBtn}
       ${id ? `<span class="me" id="current-user">${topbarIdentityHtml()}</span><button class="logout" data-action="logout" title="Cerrar sesión">Salir</button>` : ""}
     </header>`;
+}
+
+function openTechnologyIntro(trigger: HTMLButtonElement): void {
+  if (document.getElementById("technology-intro")) return;
+
+  const rect = trigger.getBoundingClientRect();
+  trigger.classList.remove("is-pressed");
+  void trigger.offsetWidth;
+  trigger.classList.add("is-pressed");
+  playFeedback("ui");
+
+  const overlay = document.createElement("div");
+  overlay.id = "technology-intro";
+  overlay.className = "technology-intro";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-labelledby", "technology-intro-title");
+  overlay.style.setProperty("--technology-origin-x", `${rect.left + rect.width / 2}px`);
+  overlay.style.setProperty("--technology-origin-y", `${rect.top + rect.height / 2}px`);
+  overlay.innerHTML = `
+    <div class="technology-intro-glow" aria-hidden="true"></div>
+    <div class="technology-intro-shell">
+      <header class="technology-intro-header">
+        <div class="technology-intro-heading">
+          <span class="technology-engine-mark" aria-hidden="true"><i></i></span>
+          <div><span>Motor gráfico</span><strong id="technology-intro-title">Vexel</strong></div>
+        </div>
+        <button class="technology-intro-close" type="button" aria-label="Cerrar intro de Vexel"><span aria-hidden="true">×</span></button>
+      </header>
+      <div class="technology-intro-stage">
+        <div class="technology-intro-loading" aria-hidden="true"><i></i><span>Inicializando Vexel</span></div>
+        <iframe src="/vexel-intro/vexel-web.html" title="Intro del motor gráfico Vexel" allow="autoplay" tabindex="0"></iframe>
+      </div>
+    </div>`;
+
+  const closeButton = overlay.querySelector<HTMLButtonElement>(".technology-intro-close")!;
+  const iframe = overlay.querySelector<HTMLIFrameElement>("iframe")!;
+  let closing = false;
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    overlay.classList.add("is-closing");
+    document.body.classList.remove("technology-intro-open");
+    window.setTimeout(() => {
+      document.removeEventListener("keydown", onKeydown);
+      overlay.remove();
+      trigger.classList.remove("is-pressed");
+      if (trigger.isConnected) trigger.focus();
+    }, 360);
+  };
+  const onKeydown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    close();
+  };
+
+  closeButton.addEventListener("click", close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  overlay.addEventListener("animationend", () => trigger.classList.remove("is-pressed"), { once: true });
+  iframe.addEventListener("load", () => {
+    overlay.classList.add("is-ready");
+    // Escape también debe cerrar cuando el foco está dentro del canvas del iframe.
+    iframe.contentDocument?.addEventListener("keydown", onKeydown);
+  });
+  document.addEventListener("keydown", onKeydown);
+  document.body.classList.add("technology-intro-open");
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => closeButton.focus());
 }
 
 function topbarIdentityHtml(): string {

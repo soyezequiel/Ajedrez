@@ -592,6 +592,127 @@ body::before {
 .icon-btn > span { font-size: 11px; }
 .haptic-control { font-size: 10px; }
 
+@media (hover: hover) and (pointer: fine) {
+  .haptic-control { display: none; }
+}
+
+/* ---------------------------------------------------------- intro Vexel */
+.technology-button { position: relative; isolation: isolate; overflow: hidden; }
+.technology-button::after {
+  content: ""; position: absolute; left: var(--technology-ripple-x, 50%); top: 50%; z-index: -1;
+  width: 8px; aspect-ratio: 1; border-radius: 50%; background: rgba(216,169,78,.24);
+  opacity: 0; transform: translate(-50%,-50%) scale(0); pointer-events: none;
+}
+.technology-button-icon,
+.technology-engine-mark {
+  position: relative; display: inline-grid; place-items: center; flex: 0 0 auto;
+  border: 1px solid currentColor; transform: rotate(45deg);
+}
+.technology-button-icon { width: 16px; height: 16px; border-radius: 3px; color: var(--gold); }
+.technology-button-icon::before,
+.technology-engine-mark::before { content: ""; position: absolute; inset: 3px; border: 1px solid currentColor; }
+.technology-button-icon i,
+.technology-engine-mark i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; }
+.technology-button:hover .technology-button-icon { transform: rotate(135deg); transition: transform .42s cubic-bezier(.2,.8,.2,1); }
+.technology-button.is-pressed { animation: technology-button-press .34s cubic-bezier(.2,.8,.2,1); }
+.technology-button.is-pressed::after { animation: technology-button-ripple .48s ease-out; }
+.technology-button.is-pressed .technology-button-icon { animation: technology-icon-ignite .42s ease-out; }
+@keyframes technology-button-press {
+  0%, 100% { transform: scale(1); }
+  35% { transform: scale(.91) translateY(1px); border-color: var(--gold-dark); }
+  70% { transform: scale(1.025); }
+}
+@keyframes technology-button-ripple {
+  0% { opacity: .8; transform: translate(-50%,-50%) scale(.4); }
+  100% { opacity: 0; transform: translate(-50%,-50%) scale(16); }
+}
+@keyframes technology-icon-ignite {
+  45% { color: #ffe3a5; filter: drop-shadow(0 0 7px rgba(216,169,78,.9)); transform: rotate(225deg) scale(.8); }
+}
+
+body.technology-intro-open { overflow: hidden; }
+.technology-intro {
+  --technology-origin-x: 50vw; --technology-origin-y: 36px;
+  position: fixed; inset: 0; z-index: 120; display: grid; place-items: stretch;
+  padding: clamp(10px, 2vw, 26px); overflow: hidden;
+  background: rgba(3,6,5,.93); backdrop-filter: blur(16px);
+  animation: technology-overlay-in .48s cubic-bezier(.18,.78,.2,1) both;
+}
+.technology-intro::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(rgba(216,169,78,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(216,169,78,.035) 1px, transparent 1px);
+  background-size: 32px 32px; mask-image: radial-gradient(circle at 50% 50%, #000, transparent 75%);
+  opacity: 0; animation: technology-grid-in .8s .22s ease-out forwards;
+}
+.technology-intro-glow {
+  position: absolute; left: var(--technology-origin-x); top: var(--technology-origin-y);
+  width: 14px; aspect-ratio: 1; border: 1px solid rgba(246,211,130,.8); border-radius: 50%;
+  transform: translate(-50%,-50%); box-shadow: 0 0 60px 14px rgba(216,169,78,.22);
+  animation: technology-origin-burst .7s ease-out both; pointer-events: none;
+}
+.technology-intro-shell {
+  position: relative; width: min(1180px, 100%); height: min(780px, 100%); margin: auto;
+  display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden;
+  border: 1px solid rgba(216,169,78,.26); border-radius: 18px;
+  background: #080c0a; box-shadow: 0 35px 110px rgba(0,0,0,.76), 0 0 0 1px rgba(255,255,255,.025) inset;
+  transform-origin: var(--technology-origin-x) var(--technology-origin-y);
+  animation: technology-shell-in .62s cubic-bezier(.16,.84,.18,1) both;
+}
+.technology-intro-header {
+  min-height: 66px; padding: 10px 12px 10px 20px; display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid rgba(216,169,78,.14); background: rgba(15,21,17,.95);
+}
+.technology-intro-heading { display: flex; align-items: center; gap: 13px; }
+.technology-engine-mark { width: 29px; height: 29px; color: var(--gold); border-radius: 5px; }
+.technology-engine-mark::before { inset: 6px; }
+.technology-intro-heading > div { display: grid; gap: 2px; }
+.technology-intro-heading span { color: var(--faint); font-size: 9px; font-weight: 600; letter-spacing: 1.8px; text-transform: uppercase; }
+.technology-intro-heading strong { font: 600 22px/1 var(--serif); letter-spacing: .7px; }
+.technology-intro-close {
+  width: 42px; height: 42px; min-height: 42px; padding: 0; display: grid; place-items: center;
+  border-color: transparent; border-radius: 50%; background: transparent; color: var(--muted); font-size: 27px;
+}
+.technology-intro-close:hover { border-color: rgba(216,169,78,.32); background: rgba(216,169,78,.08); color: var(--text); transform: rotate(4deg); }
+.technology-intro-stage { position: relative; min-height: 0; overflow: hidden; background: #050706; }
+.technology-intro-stage::after {
+  content: ""; position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  border: 1px solid rgba(255,255,255,.025); box-shadow: inset 0 0 90px rgba(0,0,0,.32);
+}
+.technology-intro iframe {
+  position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; border: 0; background: #050706;
+  opacity: 0; filter: blur(8px) brightness(.45); transform: scale(1.035);
+  transition: opacity .5s ease, filter .7s ease, transform .7s cubic-bezier(.2,.8,.2,1);
+}
+.technology-intro.is-ready iframe { opacity: 1; filter: none; transform: scale(1); }
+.technology-intro-loading {
+  position: absolute; inset: 0; z-index: 1; display: grid; place-content: center; justify-items: center; gap: 17px;
+  color: var(--faint); font: 500 10px/1 var(--mono); letter-spacing: 1.8px; text-transform: uppercase;
+  transition: opacity .24s ease, transform .24s ease;
+}
+.technology-intro-loading i {
+  width: 34px; height: 34px; border: 1px solid rgba(216,169,78,.2); border-top-color: var(--gold);
+  border-radius: 50%; animation: technology-loading-spin .8s linear infinite;
+}
+.technology-intro.is-ready .technology-intro-loading { opacity: 0; transform: scale(.9); }
+.technology-intro.is-closing { animation: technology-overlay-out .34s ease-in both; }
+.technology-intro.is-closing .technology-intro-shell { animation: technology-shell-out .34s ease-in both; }
+@keyframes technology-overlay-in { from { opacity: 0; } }
+@keyframes technology-overlay-out { to { opacity: 0; } }
+@keyframes technology-grid-in { to { opacity: 1; } }
+@keyframes technology-origin-burst {
+  from { opacity: 1; transform: translate(-50%,-50%) scale(.2); }
+  to { opacity: 0; transform: translate(-50%,-50%) scale(38); }
+}
+@keyframes technology-shell-in {
+  from { opacity: 0; clip-path: circle(0 at var(--technology-origin-x) var(--technology-origin-y)); transform: scale(.94); }
+  55% { opacity: 1; }
+  to { clip-path: circle(200vmax at var(--technology-origin-x) var(--technology-origin-y)); transform: scale(1); }
+}
+@keyframes technology-shell-out { to { opacity: 0; transform: scale(.975) translateY(8px); filter: blur(4px); } }
+@keyframes technology-loading-spin { to { transform: rotate(360deg); } }
+
 .center-screen::before { background: radial-gradient(ellipse 720px 520px at 50% 38%, rgba(45,72,56,.42), transparent 68%); }
 .login { width: min(460px, 100%); }
 .login-mark { display: none; }
@@ -814,7 +935,7 @@ body.celebrate-loss .result-card { animation: loss-card .55s ease-out; }
   .topbar { height: 58px; padding: 0 12px; gap: 7px; }
   .brand { font-size: 20px; }
   .brand .mark { width: 30px; height: 30px; font-size: 17px; }
-  .brand small, .icon-btn > span, .haptic-control, .me { display: none; }
+  .brand small, .icon-btn > span:not(.technology-button-icon), .haptic-control, .me { display: none; }
   .icon-btn, .logout { width: 36px; min-height: 36px; padding: 0; justify-content: center; }
   .home { min-height: calc(100vh - 58px); padding: 40px 18px 42px; }
   .home-title { font-size: 44px; }
