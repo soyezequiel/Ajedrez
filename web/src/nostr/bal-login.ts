@@ -4,6 +4,7 @@ import type { ChessSigner, UnsignedEvent } from "./signer-core.js";
 
 const GAME_ID = "ajedrez";
 const LAUNCHER_ORIGIN_KEY = "ajedrez.bal.launcherOrigin.v1";
+const BAL_MODE_PARAM = "lnBal";
 const CONSENT_REQUIRED_MESSAGE = "luna-negra:bal-consent-required";
 const FOCUS_REQUEST_MESSAGE = "luna-negra:bal-focus-request";
 const PERMISSIONS = [
@@ -46,6 +47,7 @@ export type BalSignerStatus = {
 const IDLE_STATUS: BalSignerStatus = { phase: "idle", detail: null };
 let balStatus = IDLE_STATUS;
 let hasLauncherContext = false;
+let balOptedOut = false;
 let transientTimer: ReturnType<typeof setTimeout> | null = null;
 const statusListeners = new Set<(status: BalSignerStatus) => void>();
 
@@ -111,7 +113,17 @@ function validLauncherOrigin(raw: string | null): string | null {
  * validando tanto `event.origin` como `event.source`.
  */
 function launcherOrigin(): string | null {
-  const fromUrl = validLauncherOrigin(new URLSearchParams(location.search).get("lnOrigin"));
+  const params = new URLSearchParams(location.search);
+  // Luna puede abrir Ajedrez como launcher pero con BAL desactivado por decisión
+  // explícita del jugador. El marcador también invalida un origen de una carga
+  // anterior si la pestaña con nombre fue reutilizada.
+  if (params.get(BAL_MODE_PARAM) === "off") {
+    balOptedOut = true;
+    forgetLauncherOrigin();
+    return null;
+  }
+  if (balOptedOut) return null;
+  const fromUrl = validLauncherOrigin(params.get("lnOrigin"));
   if (fromUrl) {
     try { sessionStorage.setItem(LAUNCHER_ORIGIN_KEY, fromUrl); }
     catch { /* storage bloqueado: BAL sigue funcionando hasta una recarga */ }
@@ -124,6 +136,17 @@ function launcherOrigin(): string | null {
 function forgetLauncherOrigin(): void {
   try { sessionStorage.removeItem(LAUNCHER_ORIGIN_KEY); }
   catch { /* noop */ }
+}
+
+function optOutOfBal(): void {
+  balOptedOut = true;
+  forgetLauncherOrigin();
+  try {
+    const url = new URL(location.href);
+    url.searchParams.delete("lnOrigin");
+    url.searchParams.set(BAL_MODE_PARAM, "off");
+    history.replaceState(null, "", url.toString());
+  } catch { /* el estado en memoria igual evita un nuevo intento en esta carga */ }
 }
 
 /** Indica si esta pestaña conserva un canal autenticable hacia Luna Negra. */
@@ -263,9 +286,17 @@ export async function tryBalLogin(
     };
   } catch (error) {
     activeClient = null;
+    if (isRejected(error)) {
+      // No usar BAL es una vía de login válida. No conservamos el launcher para
+      // que un F5 vuelva a intentar una conexión que el jugador ya rechazó.
+      optOutOfBal();
+      hasLauncherContext = false;
+      setBalStatus("idle", null);
+      return null;
+    }
     setBalStatus(
-      isRejected(error) ? "rejected" : "error",
-      errorDetail(error, isRejected(error) ? "Rechazaste la conexión" : "No se pudo conectar el signer"),
+      "error",
+      errorDetail(error, "No se pudo conectar el signer"),
     );
     return null;
   }

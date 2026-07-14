@@ -1165,6 +1165,7 @@ function cleanUrl(): void {
   const url = new URL(location.href);
   url.searchParams.delete("join");
   url.searchParams.delete("lnOrigin"); // param informativo de la tienda (Room Link)
+  url.searchParams.delete("lnBal"); // elección de BAL sólo necesaria durante el arranque
   history.replaceState(null, "", url.toString());
 }
 

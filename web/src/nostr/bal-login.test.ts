@@ -87,16 +87,27 @@ describe("BAL signer recovery", () => {
     await logoutBal({ forgetLauncher: true });
   });
 
-  it("exposes a rejected launcher request", async () => {
+  it("continues without BAL after the player rejects the launcher request", async () => {
     const { BalError } = await import("nostr-game-protocol/bal");
     mocks.sessions.push(new BalError("USER_REJECTED", "El usuario rechazó el acceso BAL"));
-    const { getBalSignerStatus, tryBalLogin } = await import("./bal-login.js");
+    const { getBalSignerStatus, hasBalLauncherContext, tryBalLogin } = await import("./bal-login.js");
 
     await expect(tryBalLogin(vi.fn())).resolves.toBeNull();
-    expect(getBalSignerStatus()).toMatchObject({
-      phase: "rejected",
-      detail: "El usuario rechazó el acceso BAL",
-    });
+    expect(getBalSignerStatus()).toEqual({ phase: "idle", detail: null });
+    expect(hasBalLauncherContext()).toBe(false);
+  });
+
+  it("honors an explicit launch without BAL even with a saved launcher origin", async () => {
+    mocks.sessions.push({ signer: signer() });
+    const { getBalSignerStatus, hasBalLauncherContext, tryBalLogin } = await import("./bal-login.js");
+
+    await expect(tryBalLogin(vi.fn())).resolves.not.toBeNull();
+    location.search = "?lnBal=off";
+
+    expect(hasBalLauncherContext()).toBe(false);
+    await expect(tryBalLogin(vi.fn())).resolves.toBeNull();
+    expect(getBalSignerStatus()).toEqual({ phase: "idle", detail: null });
+    expect(mocks.constructors).toBe(1);
   });
 
   it("detects the persisted launcher context before reconnecting", async () => {
