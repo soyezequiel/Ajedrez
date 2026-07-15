@@ -126,4 +126,3 @@ export class BalWindowHandshake {
     this.unsubscribe = null;
   }
 }
-

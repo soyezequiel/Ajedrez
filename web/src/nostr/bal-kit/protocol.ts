@@ -52,4 +52,3 @@ export function isBalSharedMethod(value: unknown): value is BalSharedMethod {
     || value === "nip44Encrypt"
     || value === "nip44Decrypt";
 }
-

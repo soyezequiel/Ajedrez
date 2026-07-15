@@ -6,7 +6,7 @@ import {
   type BalSharedState,
   type BalSharedTabMessage,
   type BalSharedWorkerMessage,
-} from "./bal-shared-protocol.js";
+} from "./protocol.js";
 
 export interface BalSharedEngine {
   readonly clientPubkey: string;
@@ -236,4 +236,3 @@ export class BalSharedWorkerHub {
     catch { this.unbind(connection); }
   }
 }
-

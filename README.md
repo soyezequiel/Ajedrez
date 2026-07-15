@@ -61,6 +61,17 @@ Verificado end-to-end: login por nombre → crear sala → 2 jugadores → parti
 relayada por el servidor → resultado y banner de ganador.
 
 
+## Kit de login BAL reutilizable
+
+La integración de Bunker Auto Login no está acoplada a Ajedrez. El módulo
+autocontenido está en [`web/src/nostr/bal-kit/`](web/src/nostr/bal-kit/) y su
+[`README`](web/src/nostr/bal-kit/README.md) explica cómo copiarlo a otro juego,
+configurar permisos y conectar el signer al challenge de autenticación propio.
+
+`web/src/nostr/bal-login.ts` es únicamente el adaptador de Ajedrez y sirve como
+ejemplo mínimo de configuración.
+
+
 ## Prerequisitos pendientes
 
 - **Instalar `nim` + `emscripten` + `ritual`** para compilar el cliente Vexel (M1)

@@ -1,15 +1,30 @@
 import { BalError } from "nostr-game-protocol/bal";
-import type { ChessSigner, UnsignedEvent } from "./signer-core.js";
+import type { Event, EventTemplate } from "nostr-tools";
 import {
   type BalSharedError,
   type BalSharedMethod,
   type BalSharedPort,
   type BalSharedState,
   type BalSharedWorkerMessage,
-} from "./bal-shared-protocol.js";
+} from "./protocol.js";
 
-const ACTIVE_HINT_KEY = "ajedrez.bal.shared-active.v1";
 const REQUEST_TIMEOUT_MS = 35_000;
+
+export type BalSharedConnectionOptions = {
+  createWorker(): SharedWorker;
+  activeHintKey: string;
+};
+
+export interface BalSharedSigner {
+  readonly method: "nip46";
+  getPublicKey(): Promise<string>;
+  signEvent(event: EventTemplate): Promise<Event>;
+  nip04Encrypt(peer: string, plaintext: string): Promise<string>;
+  nip04Decrypt(peer: string, ciphertext: string): Promise<string>;
+  nip44Encrypt(peer: string, plaintext: string): Promise<string>;
+  nip44Decrypt(peer: string, ciphertext: string): Promise<string>;
+  close(): Promise<void>;
+}
 
 type Pending<T> = {
   resolve(value: T): void;
@@ -29,21 +44,21 @@ function deserializeError(error: BalSharedError): Error {
   return result;
 }
 
-export function hasSharedBalHint(): boolean {
+export function hasSharedBalHint(activeHintKey: string): boolean {
   try {
-    const parsed = JSON.parse(localStorage.getItem(ACTIVE_HINT_KEY) ?? "null") as { expiresAt?: unknown } | null;
+    const parsed = JSON.parse(localStorage.getItem(activeHintKey) ?? "null") as { expiresAt?: unknown } | null;
     if (typeof parsed?.expiresAt === "number" && parsed.expiresAt > Date.now()) return true;
-    localStorage.removeItem(ACTIVE_HINT_KEY);
+    localStorage.removeItem(activeHintKey);
   } catch { /* storage bloqueado o marcador inválido */ }
   return false;
 }
 
-function writeSharedBalHint(expiresAt: number | null): void {
+function writeSharedBalHint(activeHintKey: string, expiresAt: number | null): void {
   try {
     if (expiresAt && expiresAt > Date.now()) {
-      localStorage.setItem(ACTIVE_HINT_KEY, JSON.stringify({ expiresAt }));
+      localStorage.setItem(activeHintKey, JSON.stringify({ expiresAt }));
     } else {
-      localStorage.removeItem(ACTIVE_HINT_KEY);
+      localStorage.removeItem(activeHintKey);
     }
   } catch { /* el worker sigue siendo la fuente de verdad */ }
 }
@@ -59,20 +74,17 @@ export class BalSharedConnection {
   private closed = false;
   private state: BalSharedState | null = null;
 
-  static create(): BalSharedConnection | null {
+  static create(options: BalSharedConnectionOptions): BalSharedConnection | null {
     if (typeof SharedWorker !== "function") return null;
     try {
-      const worker = new SharedWorker(
-        new URL("./bal-shared-worker.ts", import.meta.url),
-        { type: "module", name: "ajedrez-bal-v2" },
-      );
-      return new BalSharedConnection(worker.port as BalSharedPort);
+      const worker = options.createWorker();
+      return new BalSharedConnection(worker.port as BalSharedPort, options.activeHintKey);
     } catch {
       return null;
     }
   }
 
-  constructor(port: BalSharedPort) {
+  constructor(port: BalSharedPort, private readonly activeHintKey: string) {
     this.port = port;
     port.addEventListener("message", (event) => this.handle(event.data));
     port.start();
@@ -110,11 +122,11 @@ export class BalSharedConnection {
     });
   }
 
-  signer(): ChessSigner {
+  signer(): BalSharedSigner {
     return {
       method: "nip46",
       getPublicKey: () => this.rpc<string>("getPublicKey", []),
-      signEvent: (event: UnsignedEvent) => this.rpc("signEvent", [event]),
+      signEvent: (event: EventTemplate) => this.rpc("signEvent", [event]),
       nip04Encrypt: (peer, plaintext) => this.rpc("nip04Encrypt", [peer, plaintext]),
       nip04Decrypt: (peer, ciphertext) => this.rpc("nip04Decrypt", [peer, ciphertext]),
       nip44Encrypt: (peer, plaintext) => this.rpc("nip44Encrypt", [peer, plaintext]),
@@ -216,7 +228,7 @@ export class BalSharedConnection {
       if (this.state) {
         this.state = { ...this.state, active: false, connecting: false, connector: false, expiresAt: null, pubkey: null };
       }
-      writeSharedBalHint(null);
+      writeSharedBalHint(this.activeHintKey, null);
       for (const listener of this.endedListeners) listener(message.reason);
     }
   }
@@ -230,7 +242,7 @@ export class BalSharedConnection {
       clientPubkey: state.clientPubkey,
       pubkey: state.pubkey,
     };
-    writeSharedBalHint(this.state.active ? this.state.expiresAt : null);
+    writeSharedBalHint(this.activeHintKey, this.state.active ? this.state.expiresAt : null);
     for (const listener of this.stateListeners) listener(this.state);
     return this.state;
   }
@@ -240,4 +252,3 @@ export class BalSharedConnection {
     this.port.postMessage(message);
   }
 }
-

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BalSharedWorkerHub,
   type BalSharedEngine,
-} from "./bal-shared-worker-core.js";
-import type { BalSharedMethod, BalSharedPort } from "./bal-shared-protocol.js";
+} from "./worker-core.js";
+import type { BalSharedMethod, BalSharedPort } from "./protocol.js";
 
 class FakePort implements BalSharedPort {
   peer: FakePort | null = null;
@@ -68,6 +68,10 @@ const hub = new BalSharedWorkerHub(() => {
   engines.push(engine);
   return engine;
 });
+const connectionOptions = {
+  createWorker: () => new FakeSharedWorker() as unknown as SharedWorker,
+  activeHintKey: "test-game.bal.active",
+};
 
 class FakeSharedWorker {
   readonly port: FakePort;
@@ -92,9 +96,9 @@ beforeEach(() => {
 
 describe("BAL SharedWorker broker", () => {
   it("mantiene el signer cuando se cierra la pestaña que hizo el handshake", async () => {
-    const { BalSharedConnection, hasSharedBalHint } = await import("./bal-shared-client.js");
-    const launcherTab = BalSharedConnection.create()!;
-    const otherTab = BalSharedConnection.create()!;
+    const { BalSharedConnection, hasSharedBalHint } = await import("./shared-client.js");
+    const launcherTab = BalSharedConnection.create(connectionOptions)!;
+    const otherTab = BalSharedConnection.create(connectionOptions)!;
     const expiresAt = Date.now() + 60_000;
 
     expect((await launcherTab.attach()).active).toBe(false);
@@ -102,7 +106,7 @@ describe("BAL SharedWorker broker", () => {
     expect(claim).toMatchObject({ active: false, connecting: true, connector: true });
     const opened = await launcherTab.openSession("bunker://session", expiresAt);
     expect(opened).toMatchObject({ active: true, connector: true, expiresAt });
-    expect(hasSharedBalHint()).toBe(true);
+    expect(hasSharedBalHint(connectionOptions.activeHintKey)).toBe(true);
 
     expect(await otherTab.attach()).toMatchObject({ active: true, connector: false, expiresAt });
     launcherTab.release();
@@ -121,9 +125,9 @@ describe("BAL SharedWorker broker", () => {
   });
 
   it("cierra el worker para todos cuando Luna revoca la sesión", async () => {
-    const { BalSharedConnection } = await import("./bal-shared-client.js");
-    const launcherTab = BalSharedConnection.create()!;
-    const otherTab = BalSharedConnection.create()!;
+    const { BalSharedConnection } = await import("./shared-client.js");
+    const launcherTab = BalSharedConnection.create(connectionOptions)!;
+    const otherTab = BalSharedConnection.create(connectionOptions)!;
     await launcherTab.attach();
     await launcherTab.claimConnector();
     await launcherTab.openSession("bunker://session", Date.now() + 60_000);
@@ -138,4 +142,3 @@ describe("BAL SharedWorker broker", () => {
     otherTab.release();
   });
 });
-

@@ -3,8 +3,8 @@ import type { EventTemplate } from "nostr-tools";
 import {
   BalSharedWorkerHub,
   type BalSharedEngine,
-} from "./bal-shared-worker-core.js";
-import type { BalSharedMethod, BalSharedPort } from "./bal-shared-protocol.js";
+} from "./worker-core.js";
+import type { BalSharedMethod, BalSharedPort } from "./protocol.js";
 
 type SharedWorkerConnectEvent = Event & { ports: MessagePort[] };
 type SharedWorkerScope = typeof globalThis & {
@@ -42,4 +42,3 @@ scope.onconnect = (event) => {
 };
 
 setInterval(() => hub.sweep(), 2_000);
-
