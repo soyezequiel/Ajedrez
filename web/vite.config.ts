@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // El juego Vexel usa -pthread (SharedArrayBuffer) → la página necesita
 // cross-origin isolation (COOP/COEP). Lo aplicamos a dev y preview.
@@ -35,8 +35,12 @@ function injectBuildId() {
 
 export default defineConfig({
   plugins: [injectBuildId()],
-  // El SDK local es un paquete enlazado: ambos deben resolver la misma copia.
+  // El SDK y el juego deben resolver la misma implementación de NGP/Nostr.
   resolve: { dedupe: ["nostr-game-protocol", "nostr-tools"] },
+  test: {
+    // Permite reiniciar el singleton del SDK y aplicar mocks a sus imports.
+    server: { deps: { inline: ["nostr-bal-browser-sdk"] } },
+  },
   server: {
     port: 5173,
     headers: isolation,
