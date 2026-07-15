@@ -63,10 +63,12 @@ relayada por el servidor → resultado y banner de ganador.
 
 ## Kit de login BAL reutilizable
 
-La integración de Bunker Auto Login no está acoplada a Ajedrez. El módulo
-autocontenido está en [`web/src/nostr/bal-kit/`](web/src/nostr/bal-kit/) y su
-[`README`](web/src/nostr/bal-kit/README.md) explica cómo copiarlo a otro juego,
-configurar permisos y conectar el signer al challenge de autenticación propio.
+La integración de Bunker Auto Login no está acoplada a Ajedrez. Vive en el
+paquete `nostr-bal-browser-sdk` del repositorio hermano `herramientas nostr` y
+Ajedrez lo consume como una dependencia local durante el desarrollo.
+
+El README del SDK explica cómo instalarlo desde GitHub, configurar permisos y
+conectar el signer al challenge de autenticación propio de otro juego.
 
 `web/src/nostr/bal-login.ts` es únicamente el adaptador de Ajedrez y sirve como
 ejemplo mínimo de configuración.

@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "chess.js": "^1.4.0",
+    "nostr-bal-browser-sdk": "file:../../herramientas nostr",
     "nostr-game-protocol": "github:soyezequiel/Nostr-Game-Protocol",
     "nostr-tools": "^2.23.9",
     "qrcode": "^1.5.4"

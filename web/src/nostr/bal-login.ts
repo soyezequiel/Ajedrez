@@ -3,7 +3,7 @@ import {
   createBalBrowserLogin,
   type BalSignerPhase,
   type BalSignerStatus,
-} from "./bal-kit/index.js";
+} from "nostr-bal-browser-sdk";
 import type { ChessSigner } from "./signer-core.js";
 
 const GAME_ID = "ajedrez";
@@ -27,9 +27,9 @@ const bal = createBalBrowserLogin({
   permissions: PERMISSIONS,
   launcherOriginStorageKey: `${GAME_ID}.bal.launcher-origin.v1`,
   shared: {
-    // Vite exige ver el constructor y new URL juntos para emitir el chunk.
+    // El entry local permite que Vite empaquete el worker provisto por el SDK.
     createWorker: () => new SharedWorker(
-      new URL("./bal-kit/worker-entry.ts", import.meta.url),
+      new URL("./bal-worker.ts", import.meta.url),
       { type: "module", name: `${GAME_ID}-bal-v2` },
     ),
     activeHintKey: `${GAME_ID}.bal.shared-active.v1`,

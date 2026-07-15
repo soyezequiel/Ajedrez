@@ -35,6 +35,8 @@ function injectBuildId() {
 
 export default defineConfig({
   plugins: [injectBuildId()],
+  // El SDK local es un paquete enlazado: ambos deben resolver la misma copia.
+  resolve: { dedupe: ["nostr-game-protocol", "nostr-tools"] },
   server: {
     port: 5173,
     headers: isolation,
