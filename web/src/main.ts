@@ -29,7 +29,15 @@ import {
   tryBalLogin,
   type BalSignerPhase,
 } from "./nostr/bal-login.js";
-import { sessionTokenBelongsToPubkey } from "./nostr/session-token.js";
+import {
+  clearSessionToken,
+  readSessionToken,
+  readSessionTokenOrigin,
+  sessionTokenBelongsToPubkey,
+  sessionTokenRequiresBal,
+  writeSessionToken,
+  type SessionTokenOrigin,
+} from "./nostr/session-token.js";
 import { connectBunker, startNostrConnect } from "./nostr/signer-nip46.js";
 import QRCode from "qrcode";
 import { fetchProfile, fetchProfiles, type NostrProfile } from "./nostr/relays.js";
@@ -139,7 +147,13 @@ function leaveRoomLocally(reason?: string): void {
 /** Cómo está autenticado el jugador en esta sesión (para re-auth al reconectar). */
 type LoginMode =
   | { kind: "guest"; name: string }
-  | { kind: "nostr"; signer: NgpSigner; rawSigner: ChessSigner; displayName: string };
+  | {
+      kind: "nostr";
+      signer: NgpSigner;
+      rawSigner: ChessSigner;
+      displayName: string;
+      sessionOrigin: SessionTokenOrigin;
+    };
 let login: LoginMode | null = null;
 
 /** Controlador de presencia NIP-38 (solo login Nostr). */
@@ -329,7 +343,11 @@ async function startLoginFlow(): Promise<void> {
   // Si Luna abrió esta pestaña, el token local sólo puede reutilizarse después de
   // comprobar que pertenece a la pubkey BAL actual. Una pestaña con nombre puede
   // conservar durante 30 días el token de otra cuenta de Luna.
-  const token = readSessionToken();
+  let token = readSessionToken();
+  const tokenOrigin = readSessionTokenOrigin();
+  // Compatibilidad con tokens emitidos antes de guardar el origen: BAL elimina
+  // siempre el signer persistido, mientras que los otros flujos Nostr lo conservan.
+  const tokenRequiresBal = sessionTokenRequiresBal(tokenOrigin, hasStoredSigner());
   if (token && hasBalLauncherContext()) {
     const balSigner = await connectBal();
     if (balSigner) {
@@ -346,10 +364,10 @@ async function startLoginFlow(): Promise<void> {
       }
 
       if (sessionTokenBelongsToPubkey(token, balPubkey)) {
-        authViaToken(token, Promise.resolve(balSigner));
+        authViaToken(token, Promise.resolve(balSigner), "bal");
       } else {
         clearSessionToken();
-        await beginNostr(balSigner);
+        await beginNostr(balSigner, "bal");
       }
       return;
     }
@@ -364,6 +382,13 @@ async function startLoginFlow(): Promise<void> {
     }
   }
 
+  // El signer BAL es efímero: si no se pudo restaurar arriba, su token no puede
+  // convertirse silenciosamente en una sesión independiente de Luna Negra.
+  if (token && tokenRequiresBal) {
+    clearSessionToken();
+    token = null;
+  }
+
   if (token) {
     authViaToken(token, restoreSigner());
     return;
@@ -374,7 +399,7 @@ async function startLoginFlow(): Promise<void> {
   if (balSigner) {
     clearSessionToken();
     setEphemeralActiveSigner(balSigner);
-    await beginNostr(balSigner);
+    await beginNostr(balSigner, "bal");
     return;
   }
 
@@ -427,31 +452,6 @@ let profileFetch: Promise<unknown> | null = null;
 /** ¿Ya conocemos el perfil de esta pubkey (aunque sea "no tiene")? → no esperar. */
 let profileKnown = false;
 
-/** Token de sesión Nostr (emitido por el server): reconecta sin re-firmar, como la
- *  cookie de Luna. Se guarda por 30 días y rota en cada authed. */
-const SESSION_TOKEN_KEY = "ajedrez.session.v1";
-function readSessionToken(): string | null {
-  try {
-    return localStorage.getItem(SESSION_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-function writeSessionToken(token: string): void {
-  try {
-    localStorage.setItem(SESSION_TOKEN_KEY, token);
-  } catch {
-    /* storage bloqueado */
-  }
-}
-function clearSessionToken(): void {
-  try {
-    localStorage.removeItem(SESSION_TOKEN_KEY);
-  } catch {
-    /* noop */
-  }
-}
-
 /** Autentica la conexión Nostr: por token si lo hay (sin firmar), si no por challenge. */
 function sendNostrAuth(): void {
   const token = readSessionToken();
@@ -464,7 +464,10 @@ function sendNostrAuth(): void {
  * Conecta al server DE INMEDIATO; el nombre de perfil se resuelve en paralelo
  * (caché primero, relays de fondo) para no demorar el login.
  */
-async function beginNostr(signer: ChessSigner): Promise<void> {
+async function beginNostr(
+  signer: ChessSigner,
+  sessionOrigin: SessionTokenOrigin = "standalone",
+): Promise<void> {
   renderConnecting();
   const token = readSessionToken();
   if (token) {
@@ -472,7 +475,13 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
     // extensión puede tardar o directamente colgarse en getPublicKey; la sesión no
     // debe depender de eso. No llamamos getPublicKey acá; la primera firma llega
     // con la presencia (al autenticar), que con extensión puede promptar al abrir.
-    login = { kind: "nostr", signer: toNgpSigner(signer), rawSigner: signer, displayName: "" };
+    login = {
+      kind: "nostr",
+      signer: toNgpSigner(signer),
+      rawSigner: signer,
+      displayName: "",
+      sessionOrigin,
+    };
     net.connect();
     net.authToken(token);
     return;
@@ -490,7 +499,13 @@ async function beginNostr(signer: ChessSigner): Promise<void> {
   updateStoredPubkey(pubkey);
   const cached = readCachedProfile(pubkey);
   profileKnown = cached.known;
-  login = { kind: "nostr", signer: toNgpSigner(signer), rawSigner: signer, displayName: cached.name ?? "" };
+  login = {
+    kind: "nostr",
+    signer: toNgpSigner(signer),
+    rawSigner: signer,
+    displayName: cached.name ?? "",
+    sessionOrigin,
+  };
   playerProfiles.set(pubkey, { name: cached.name, picture: cached.picture, lud16: null });
   // Perfil en paralelo: refresca la caché (positiva o negativa) y el nombre si
   // todavía no se mandó al server.
@@ -552,6 +567,7 @@ function lazySigner(p: Promise<ChessSigner | null>): ChessSigner {
 function authViaToken(
   token: string,
   restorePromise: Promise<ChessSigner | null> = restoreSigner(),
+  sessionOrigin: SessionTokenOrigin = "standalone",
 ): void {
   renderConnecting();
   const lazy = lazySigner(restorePromise);
@@ -560,6 +576,7 @@ function authViaToken(
     signer: toNgpSigner(lazy),
     rawSigner: lazy,
     displayName: "",
+    sessionOrigin,
   };
   login = tokenLogin;
   net.connect();
@@ -967,7 +984,10 @@ function wireNet(): void {
   net.on("authed", (m) => {
     clearConnectWatchdog();
     hideReconnectBanner(); // la sesión volvió; room/match re-habilitan el tablero
-    if (m.token) writeSessionToken(m.token); // guarda/rota el token de sesión
+    if (m.token) {
+      const origin = login?.kind === "nostr" ? login.sessionOrigin : "standalone";
+      writeSessionToken(m.token, origin); // guarda/rota el token y conserva su flujo
+    }
     state.identity = m.identity;
     startInbox();
     if (m.identity.pubkey) {

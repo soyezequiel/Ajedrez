@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { sessionTokenBelongsToPubkey, sessionTokenPubkey } from "./session-token.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  clearSessionToken,
+  readSessionToken,
+  readSessionTokenOrigin,
+  sessionTokenBelongsToPubkey,
+  sessionTokenPubkey,
+  sessionTokenRequiresBal,
+  writeSessionToken,
+} from "./session-token.js";
 
 function tokenFor(pubkey: unknown): string {
   const bytes = new TextEncoder().encode(JSON.stringify({
@@ -44,5 +52,46 @@ describe("session token identity", () => {
   ])("rechaza tokens sin una pubkey válida: %s", (token) => {
     expect(sessionTokenPubkey(token)).toBeNull();
     expect(sessionTokenBelongsToPubkey(token, "a".repeat(64))).toBe(false);
+  });
+});
+
+describe("session token origin", () => {
+  it("exige BAL para tokens marcados y para tokens legados sin signer persistido", () => {
+    expect(sessionTokenRequiresBal("bal", true)).toBe(true);
+    expect(sessionTokenRequiresBal(null, false)).toBe(true);
+    expect(sessionTokenRequiresBal("standalone", false)).toBe(false);
+    expect(sessionTokenRequiresBal(null, true)).toBe(false);
+  });
+
+  it("recuerda que la sesión fue iniciada con BAL", () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+
+    writeSessionToken("token-bal", "bal");
+
+    expect(readSessionToken()).toBe("token-bal");
+    expect(readSessionTokenOrigin()).toBe("bal");
+
+    clearSessionToken();
+    expect(readSessionToken()).toBeNull();
+    expect(readSessionTokenOrigin()).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("mantiene como desconocido el origen de tokens anteriores a esta marca", () => {
+    const storage = new Map<string, string>([["ajedrez.session.v1", "token-viejo"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+
+    expect(readSessionToken()).toBe("token-viejo");
+    expect(readSessionTokenOrigin()).toBeNull();
+    vi.unstubAllGlobals();
   });
 });
