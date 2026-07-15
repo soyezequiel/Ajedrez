@@ -1,5 +1,7 @@
 /** Puerto de Ajedrez hacia BAL. Todo el protocolo vive en nostr-game-protocol. */
 import { BalError, BalGameClient, WebPostMessageTransport } from "nostr-game-protocol/bal";
+import { BalSharedConnection, hasSharedBalHint } from "./bal-shared-client.js";
+import { BalWindowHandshake } from "./bal-window-handshake.js";
 import type { ChessSigner, UnsignedEvent } from "./signer-core.js";
 
 const GAME_ID = "ajedrez";
@@ -22,7 +24,12 @@ const PERMISSIONS = [
 ];
 
 let activeClient: BalGameClient<Window> | null = null;
-type BalLoginSession = Awaited<ReturnType<BalGameClient<Window>["login"]>>;
+let activeHandshake: BalWindowHandshake | null = null;
+let activeShared: BalSharedConnection | null = null;
+type RawBalLoginSession = Awaited<ReturnType<BalGameClient<Window>["login"]>>;
+type BalLoginSession = Omit<RawBalLoginSession, "signer"> & {
+  signer: RawBalLoginSession["signer"] | ChessSigner;
+};
 
 export type BalSignerPhase =
   | "idle"
@@ -61,7 +68,9 @@ function setBalStatus(phase: BalSignerPhase, detail: string | null): void {
 }
 
 function stableBalStatus(): BalSignerStatus {
-  if (activeClient) return { phase: "connected", detail: "Luna Negra está firmando para Ajedrez" };
+  if (activeShared || activeClient) {
+    return { phase: "connected", detail: "Luna Negra está firmando para Ajedrez" };
+  }
   if (hasLauncherContext) return { phase: "disconnected", detail: "Sin una sesión de firma activa" };
   return IDLE_STATUS;
 }
@@ -106,17 +115,9 @@ function validLauncherOrigin(raw: string | null): string | null {
   } catch { return null; }
 }
 
-/**
- * `cleanUrl()` quita `lnOrigin` después de autenticar, pero un F5 o una recarga por
- * deploy todavía necesita ese origen para volver a negociar el firmante efímero.
- * Lo conservamos por pestaña: no contiene credenciales y cada mensaje sigue
- * validando tanto `event.origin` como `event.source`.
- */
+/** Conserva por pestaña el origen del launcher, nunca credenciales BAL. */
 function launcherOrigin(): string | null {
   const params = new URLSearchParams(location.search);
-  // Luna puede abrir Ajedrez como launcher pero con BAL desactivado por decisión
-  // explícita del jugador. El marcador también invalida un origen de una carga
-  // anterior si la pestaña con nombre fue reutilizada.
   if (params.get(BAL_MODE_PARAM) === "off") {
     balOptedOut = true;
     forgetLauncherOrigin();
@@ -126,7 +127,7 @@ function launcherOrigin(): string | null {
   const fromUrl = validLauncherOrigin(params.get("lnOrigin"));
   if (fromUrl) {
     try { sessionStorage.setItem(LAUNCHER_ORIGIN_KEY, fromUrl); }
-    catch { /* storage bloqueado: BAL sigue funcionando hasta una recarga */ }
+    catch { /* storage bloqueado: BAL sigue hasta una recarga */ }
     return fromUrl;
   }
   try { return validLauncherOrigin(sessionStorage.getItem(LAUNCHER_ORIGIN_KEY)); }
@@ -146,14 +147,15 @@ function optOutOfBal(): void {
     url.searchParams.delete("lnOrigin");
     url.searchParams.set(BAL_MODE_PARAM, "off");
     history.replaceState(null, "", url.toString());
-  } catch { /* el estado en memoria igual evita un nuevo intento en esta carga */ }
+  } catch { /* el estado en memoria igual evita otro intento */ }
 }
 
-/** Indica si esta pestaña conserva un canal autenticable hacia Luna Negra. */
 export function hasBalLauncherContext(): boolean {
   const origin = launcherOrigin();
+  if (balOptedOut) return false;
   const opener = window.opener;
-  return Boolean(origin && opener && typeof opener.postMessage === "function");
+  return Boolean(origin && opener && typeof opener.postMessage === "function")
+    || hasSharedBalHint();
 }
 
 export async function tryBalLogin(
@@ -162,35 +164,59 @@ export async function tryBalLogin(
 ): Promise<ChessSigner | null> {
   const originFromUrl = validLauncherOrigin(new URLSearchParams(location.search).get("lnOrigin"));
   const origin = launcherOrigin();
-  const opener = window.opener;
-  if (!origin || !opener || typeof opener.postMessage !== "function") {
+  if (balOptedOut) {
     hasLauncherContext = false;
     setBalStatus("idle", null);
     return null;
   }
-  hasLauncherContext = true;
-  setBalStatus(
-    originFromUrl ? "connecting" : "reconnecting",
-    originFromUrl ? "Negociando una sesión con Luna Negra" : "Recuperando el signer de Luna Negra",
-  );
-
+  const opener = window.opener;
+  const directLauncher = Boolean(origin && opener && typeof opener.postMessage === "function");
+  let shared = activeShared ?? BalSharedConnection.create();
+  let endingShared = false;
   let session: BalLoginSession;
   let reconnecting: Promise<BalLoginSession> | null = null;
 
-  const connect = async (): Promise<BalLoginSession> => {
-    const handleConsentRequired = (event: MessageEvent) => {
-      if (event.source !== opener || event.origin !== origin) return;
-      const message = event.data as { type?: unknown; gameId?: unknown } | null;
-      if (
-        message?.type === CONSENT_REQUIRED_MESSAGE
-        && message.gameId === GAME_ID
-      ) {
-        setBalStatus("awaiting_approval", "Esperando tu autorización en Luna Negra");
-        onConsentRequired?.();
-      }
-    };
-    window.addEventListener("message", handleConsentRequired);
+  hasLauncherContext = directLauncher || hasSharedBalHint();
+  setBalStatus(
+    originFromUrl ? "connecting" : hasLauncherContext ? "reconnecting" : "connecting",
+    originFromUrl
+      ? "Negociando una sesión con Luna Negra"
+      : hasLauncherContext
+        ? "Buscando una sesión BAL compartida"
+        : "Buscando un signer activo de Luna Negra",
+  );
 
+  const sessionFromState = async (
+    state: Awaited<ReturnType<BalSharedConnection["attach"]>>,
+  ): Promise<BalLoginSession | null> => {
+    if (!state.active || !state.expiresAt) return null;
+    const signer = shared!.signer();
+    const pubkey = state.pubkey ?? await signer.getPublicKey();
+    activeShared = shared;
+    hasLauncherContext = true;
+    return { signer, pubkey, expiresAt: state.expiresAt };
+  };
+
+  const sharedSession = async (): Promise<BalLoginSession | null> => {
+    if (!shared) return null;
+    try {
+      let state = await shared.attach();
+      if (!state.active && state.connecting && !state.connector) {
+        state = await shared.waitUntilActive();
+      }
+      return sessionFromState(state);
+    } catch {
+      shared.release();
+      if (activeShared === shared) activeShared = null;
+      shared = null;
+      return null;
+    }
+  };
+
+  const connectFallback = async (): Promise<BalLoginSession> => {
+    if (!origin || !opener || typeof opener.postMessage !== "function") {
+      throw new BalError("NOT_AVAILABLE", "No hay una pestaña lanzada por Luna Negra");
+    }
     const client = new BalGameClient({
       gameId: GAME_ID,
       requestedPermissions: PERMISSIONS,
@@ -198,8 +224,6 @@ export async function tryBalLogin(
       launcherPeer: opener,
       transport: new WebPostMessageTransport(window),
       onLauncherLogout: () => {
-        // Una sesión anterior puede avisar su cierre después de que ya la
-        // reemplazamos. Solo la sesión vigente puede cerrar el login del juego.
         if (activeClient !== client) return;
         activeClient = null;
         forgetLauncherOrigin();
@@ -214,41 +238,119 @@ export async function tryBalLogin(
     try {
       const next = await client.login();
       if (previous && previous !== client) void previous.logout("game_logout");
-      setBalStatus("connected", "Luna Negra está firmando para Ajedrez");
       return next;
     } catch (error) {
-      if (activeClient === client) activeClient = null;
+      if (activeClient === client) activeClient = previous;
+      throw error;
+    }
+  };
+
+  const connectThroughWorker = async (): Promise<BalLoginSession> => {
+    if (!shared || !origin || !opener || typeof opener.postMessage !== "function") {
+      throw new BalError("NOT_AVAILABLE", "No hay una pestaña lanzada por Luna Negra");
+    }
+    let state = await shared.claimConnector();
+    const existing = await sessionFromState(state);
+    if (existing) return existing;
+    if (!state.connector) {
+      state = await shared.waitUntilActive();
+      const connected = await sessionFromState(state);
+      if (connected) return connected;
+      throw new BalError("NOT_AVAILABLE", "La otra pestaña no completó BAL");
+    }
+
+    const handleConsentRequired = (event: MessageEvent) => {
+      if (event.source !== opener || event.origin !== origin) return;
+      const message = event.data as { type?: unknown; gameId?: unknown } | null;
+      if (message?.type === CONSENT_REQUIRED_MESSAGE && message.gameId === GAME_ID) {
+        setBalStatus("awaiting_approval", "Esperando tu autorización en Luna Negra");
+        onConsentRequired?.();
+      }
+    };
+    window.addEventListener("message", handleConsentRequired);
+
+    const handshake = new BalWindowHandshake({
+      gameId: GAME_ID,
+      requestedPermissions: PERMISSIONS,
+      launcherOrigin: origin,
+      launcherPeer: opener,
+      onLauncherLogout: () => {
+        if (activeHandshake !== handshake) return;
+        activeHandshake = null;
+        endingShared = true;
+        shared?.endSession("launcher_logout");
+        forgetLauncherOrigin();
+        hasLauncherContext = false;
+        setBalStatus("disconnected", "Luna Negra cerró la sesión de firma");
+        returnToStableAfter(3500);
+        onLauncherLogout();
+      },
+    });
+    activeHandshake?.closeControl();
+    activeHandshake = handshake;
+    let granted = false;
+    try {
+      const grant = await handshake.login(state.clientPubkey);
+      granted = true;
+      const opened = await shared.openSession(grant.bunkerUri, grant.expiresAt);
+      const connected = await sessionFromState(opened);
+      if (!connected) throw new BalError("NIP46_ERROR", "El worker no abrió la sesión BAL");
+      return connected;
+    } catch (error) {
+      if (activeHandshake === handshake) activeHandshake = null;
+      if (granted) await handshake.logout("game_logout");
+      else handshake.closeControl();
       throw error;
     } finally {
       window.removeEventListener("message", handleConsentRequired);
     }
   };
 
+  if (shared) {
+    shared.onEnded(() => {
+      if (endingShared || activeShared !== shared) return;
+      activeShared = null;
+      hasLauncherContext = directLauncher;
+      setBalStatus("disconnected", "La sesión BAL compartida se cerró");
+      returnToStableAfter(3500);
+      onLauncherLogout();
+    });
+  }
+
+  const connect = async (): Promise<BalLoginSession> => {
+    const existing = await sharedSession();
+    if (existing) {
+      setBalStatus("connected", "Reutilizando la sesión BAL de otra pestaña de Ajedrez");
+      return existing;
+    }
+    const next = shared ? await connectThroughWorker() : await connectFallback();
+    setBalStatus(
+      "connected",
+      shared
+        ? "La sesión BAL vive en el worker compartido de Ajedrez"
+        : "Luna Negra está firmando para Ajedrez",
+    );
+    return next;
+  };
+
   try {
     session = await connect();
-
-    /**
-     * El launcher conserva la identidad, pero una recarga mata el servicio
-     * NIP-46 efímero. El token del game server puede mantener la UI logueada y
-     * dejar al usuario sin firma para retos. Ante el primer fallo renegociamos
-     * BAL y repetimos exactamente una vez la operación pendiente.
-     */
     const withReconnect = async <T>(
       operation: (signer: BalLoginSession["signer"]) => Promise<T>,
     ): Promise<T> => {
       try {
         return await operation(session.signer);
       } catch (firstError) {
+        // El worker es la conexión real y sobrevive a las pestañas. No se lo
+        // reemplaza por un rechazo puntual de firma. El fallback v1 sí renegocia.
+        if (activeShared) throw firstError;
         try {
           setBalStatus("reconnecting", "La sesión venció; reconectando con Luna Negra");
           reconnecting ??= connect().finally(() => { reconnecting = null; });
           session = await reconnecting;
           return await operation(session.signer);
         } catch (reconnectError) {
-          console.warn("[BAL] no se pudo recuperar la sesión", {
-            firstError,
-            reconnectError,
-          });
+          console.warn("[BAL] no se pudo recuperar la sesión", { firstError, reconnectError });
           throw reconnectError;
         }
       }
@@ -265,39 +367,38 @@ export async function tryBalLogin(
       nip04Encrypt: (peer, plaintext) => trackBalOperation(
         "encrypting",
         "Cifrando mensaje NIP-04",
-        () => withReconnect((signer) => signer.nip04Encrypt(peer, plaintext)),
+        () => withReconnect((signer) => signer.nip04Encrypt!(peer, plaintext)),
       ),
       nip04Decrypt: (peer, ciphertext) => trackBalOperation(
         "decrypting",
         "Descifrando mensaje NIP-04",
-        () => withReconnect((signer) => signer.nip04Decrypt(peer, ciphertext)),
+        () => withReconnect((signer) => signer.nip04Decrypt!(peer, ciphertext)),
       ),
       nip44Encrypt: (peer, plaintext) => trackBalOperation(
         "encrypting",
         "Cifrando mensaje NIP-44",
-        () => withReconnect((signer) => signer.nip44Encrypt(peer, plaintext)),
+        () => withReconnect((signer) => signer.nip44Encrypt!(peer, plaintext)),
       ),
       nip44Decrypt: (peer, ciphertext) => trackBalOperation(
         "decrypting",
         "Descifrando mensaje NIP-44",
-        () => withReconnect((signer) => signer.nip44Decrypt(peer, ciphertext)),
+        () => withReconnect((signer) => signer.nip44Decrypt!(peer, ciphertext)),
       ),
-      close: () => session.signer.close(),
+      close: () => session.signer.close?.() ?? Promise.resolve(),
     };
   } catch (error) {
     activeClient = null;
+    if (activeShared === shared) activeShared = null;
+    shared?.release();
     if (isRejected(error)) {
-      // No usar BAL es una vía de login válida. No conservamos el launcher para
-      // que un F5 vuelva a intentar una conexión que el jugador ya rechazó.
       optOutOfBal();
       hasLauncherContext = false;
       setBalStatus("idle", null);
       return null;
     }
-    setBalStatus(
-      "error",
-      errorDetail(error, "No se pudo conectar el signer"),
-    );
+    hasLauncherContext = directLauncher;
+    if (directLauncher) setBalStatus("error", errorDetail(error, "No se pudo conectar el signer"));
+    else setBalStatus("idle", null);
     return null;
   }
 }
@@ -327,32 +428,34 @@ async function trackBalOperation<T>(
   }
 }
 
-/** Pide al launcher que recupere el foco y además hace el intento directo. */
 export function requestBalLauncherFocus(): void {
   const origin = launcherOrigin();
   const opener = window.opener;
   if (!origin || !opener) return;
-  try {
-    opener.postMessage(
-      { type: FOCUS_REQUEST_MESSAGE, gameId: GAME_ID },
-      origin,
-    );
-  } catch { /* el fallback visual explica cómo volver manualmente */ }
-  try {
-    opener.focus();
-  } catch { /* COOP o el navegador pueden restringir focus entre pestañas */ }
+  try { opener.postMessage({ type: FOCUS_REQUEST_MESSAGE, gameId: GAME_ID }, origin); }
+  catch { /* fallback visual */ }
+  try { opener.focus(); }
+  catch { /* el navegador puede restringir el foco */ }
 }
 
 export async function logoutBal(options: { forgetLauncher?: boolean } = {}): Promise<void> {
   const client = activeClient;
-  if (client) setBalStatus("disconnecting", "Cerrando la sesión con Luna Negra");
+  const handshake = activeHandshake;
+  const shared = activeShared;
+  if (client || shared) setBalStatus("disconnecting", "Cerrando esta pestaña del signer BAL");
   activeClient = null;
+  activeHandshake = null;
+  activeShared = null;
+  // La conexión NIP-46 está en el worker. Soltar la pestaña original no la mata
+  // mientras quede cualquier otra pestaña de Ajedrez conectada.
+  shared?.release();
+  handshake?.closeControl();
   await client?.logout("game_logout");
   if (options.forgetLauncher) {
     forgetLauncherOrigin();
     hasLauncherContext = false;
     setBalStatus("idle", null);
   } else if (hasLauncherContext) {
-    setBalStatus("disconnected", "La sesión de firma se cerró");
+    setBalStatus("disconnected", "Esta pestaña dejó la sesión compartida");
   }
 }

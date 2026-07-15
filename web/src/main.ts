@@ -29,6 +29,7 @@ import {
   tryBalLogin,
   type BalSignerPhase,
 } from "./nostr/bal-login.js";
+import { sessionTokenBelongsToPubkey } from "./nostr/session-token.js";
 import { connectBunker, startNostrConnect } from "./nostr/signer-nip46.js";
 import QRCode from "qrcode";
 import { fetchProfile, fetchProfiles, type NostrProfile } from "./nostr/relays.js";
@@ -325,18 +326,46 @@ async function startLoginFlow(): Promise<void> {
     renderBalConsentRequired,
   );
 
-  // Un reload no debe esperar las rondas NIP-46 por relays. El token restaura la
-  // sesión del server de inmediato y BAL se renegocia en paralelo para presencia,
-  // retos y firmas. El lazy signer espera esa promesa sólo cuando una feature lo usa.
+  // Si Luna abrió esta pestaña, el token local sólo puede reutilizarse después de
+  // comprobar que pertenece a la pubkey BAL actual. Una pestaña con nombre puede
+  // conservar durante 30 días el token de otra cuenta de Luna.
   const token = readSessionToken();
+  if (token && hasBalLauncherContext()) {
+    const balSigner = await connectBal();
+    if (balSigner) {
+      setEphemeralActiveSigner(balSigner);
+      let balPubkey: string;
+      try {
+        balPubkey = await balSigner.getPublicKey();
+      } catch {
+        clearActiveSigner();
+        clearSessionToken();
+        toast("No se pudo verificar tu cuenta de Luna Negra.");
+        renderLogin();
+        return;
+      }
+
+      if (sessionTokenBelongsToPubkey(token, balPubkey)) {
+        authViaToken(token, Promise.resolve(balSigner));
+      } else {
+        clearSessionToken();
+        await beginNostr(balSigner);
+      }
+      return;
+    }
+
+    // Un rechazo explícito desactiva BAL y permite continuar por el login propio.
+    // Ante un error transitorio descartamos el token: no podemos permitir que otro
+    // método de login lo reutilice sin verificar la cuenta que abrió esta pestaña.
+    if (hasBalLauncherContext()) {
+      clearSessionToken();
+      renderLogin();
+      return;
+    }
+  }
+
   if (token) {
-    const restorePromise = hasBalLauncherContext()
-      ? connectBal().then((signer) => {
-          if (signer) setEphemeralActiveSigner(signer);
-          return signer;
-        })
-      : restoreSigner();
-    authViaToken(token, restorePromise);
+    authViaToken(token, restoreSigner());
     return;
   }
 
